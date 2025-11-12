@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'data_collector',
     'analyzer',
     'dashboard',
+    'user_qa',
 ]
 
 MIDDLEWARE = [
@@ -201,4 +202,10 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+# RAG & Vector DB Configuration
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+VECTOR_DB_PATH = os.getenv('VECTOR_DB_PATH', BASE_DIR / 'vector_db')
+CHROMA_PERSIST_DIR = os.getenv('CHROMA_PERSIST_DIR', BASE_DIR / 'chroma_db')
 
