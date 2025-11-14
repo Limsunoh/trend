@@ -8,6 +8,7 @@ from .serializers import (
     TrendAnalysisSerializer,
     HotKeywordSerializer
 )
+from common.redis_services import SearchCacheService
 
 
 class KeywordViewSet(viewsets.ReadOnlyModelViewSet):

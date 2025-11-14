@@ -1,6 +1,7 @@
 """
 벡터DB 및 RAG 서비스
 """
+from common.redis_services import RAGCacheService
 
 
 class VectorDBService:
@@ -27,19 +28,39 @@ class VectorDBService:
 
 
 class RAGService:
-    """RAG 질의응답 서비스"""
+    """RAG 질의응답 서비스 (캐싱 통합)"""
     
     def __init__(self):
         # TODO: LLM 및 VectorDBService 초기화
         self.vector_db = VectorDBService()
+        # 우선순위 1: RAG 질의응답 캐싱
+        self.cache_service = RAGCacheService()
         pass
     
     def query(self, query_text, top_k=5, include_sources=True):
-        """RAG 질의응답"""
+        """
+        RAG 질의응답 (캐싱 적용)
+        1. 캐시 확인
+        2. 캐시 없으면 RAG 처리
+        3. 결과 캐싱
+        """
+        # 캐시 확인
+        cached_response = self.cache_service.get_cached_response(query_text)
+        if cached_response:
+            return cached_response
+        
         # TODO: 
         # 1. 벡터DB에서 유사 문서 검색
         # 2. 검색된 문서를 컨텍스트로 LLM에 전달
         # 3. LLM 답변 생성
-        # 4. 결과 반환
-        pass
+        response = {
+            'answer': '',  # TODO: LLM 답변
+            'sources': [],  # TODO: 출처 정보
+            'query': query_text
+        }
+        
+        # 결과 캐싱
+        self.cache_service.cache_response(query_text, response)
+        
+        return response
 
