@@ -16,6 +16,8 @@ router = DefaultRouter()
 # router.register(r'jobs', DataCollectionJobViewSet)
 
 urlpatterns = [
-    # TODO: URL 패턴 추가
-    # path('trigger/', trigger_collection, name='trigger_collection'),
+    # 경향신문 RSS 수집 트리거 엔드포인트
+    # POST /api/collect/trigger/ - 수집 작업 시작
+    # GET /api/collect/trigger/ - 최근 수집 작업 상태 조회
+    path('trigger/', trigger_collection, name='trigger_collection'),
 ] + router.urls
