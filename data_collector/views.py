@@ -3,7 +3,7 @@
 """
 import logging
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, action
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import QuerySet
@@ -15,6 +15,7 @@ from .serializers import (
     DataCollectionJobSerializer
 )
 from .tasks import collect_rss_news_task, collect_all_rss_news_task
+from .services import RSSCollectorService
 from celery.result import AsyncResult
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,48 @@ def filter_queryset_by_params(
             except (ValueError, TypeError):
                 pass
     return queryset
+
+
+class RSSSourceCreationViewSet(viewsets.ViewSet):
+    """RSS URL로부터 NewsSource 자동 생성 ViewSet"""
+
+    def create(self, request):
+        """RSS URL로부터 NewsSource 자동 생성"""
+        rss_url = (
+            request.data.get('rss_url') or
+            request.query_params.get('rss_url')
+        )
+
+        if not rss_url:
+            return Response({
+                'status': 'error',
+                'message': 'rss_url 파라미터가 필요합니다.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 서비스를 통한 RSS 소스 생성
+        collector = RSSCollectorService()
+        source, result_status, result_dict = collector.create_source_from_rss(
+            rss_url=rss_url,
+            name=request.data.get('name') or request.query_params.get('name'),
+            is_active=request.data.get('is_active', True),
+            collection_interval=int(
+                request.data.get('collection_interval', 60)
+            )
+        )
+
+        # 응답 상태 코드 결정
+        if result_status == 'created':
+            status_code = status.HTTP_201_CREATED
+        elif result_status == 'exists':
+            status_code = status.HTTP_200_OK
+        else:
+            status_code = status.HTTP_400_BAD_REQUEST
+
+        return Response({
+            'status': result_status,
+            'message': result_dict.get('message'),
+            'source': NewsSourceSerializer(source).data if source else None
+        }, status=status_code)
 
 
 class NewsSourceViewSet(viewsets.ModelViewSet):
@@ -146,10 +189,11 @@ class DataCollectionJobViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.select_related('source')
 
 
-@api_view(['POST', 'GET'])
-def trigger_collection(request):
-    """데이터 수집 작업 트리거 API"""
-    if request.method == 'GET':
+class TriggerCollectionViewSet(viewsets.ViewSet):
+    """데이터 수집 작업 트리거 ViewSet"""
+
+    def list(self, request):
+        """최근 수집 작업 목록 조회 (GET /api/collector/trigger/)"""
         recent_jobs = (
             DataCollectionJob.objects
             .select_related('source')
@@ -161,59 +205,74 @@ def trigger_collection(request):
             'jobs': DataCollectionJobSerializer(recent_jobs, many=True).data
         })
 
-    try:
-        source_id = (
-            request.data.get('source_id') or
-            request.query_params.get('source_id')
-        )
-        source_id = int(source_id) if source_id else None
-        source_name = (
-            request.data.get('source_name') or
-            request.query_params.get('source_name')
-        )
-        source_name = source_name.strip() if source_name else None
-        collect_all = (
-            request.data.get('collect_all') or
-            request.query_params.get('collect_all')
-        )
-        collect_all = (
-            str(collect_all).lower() == 'true' if collect_all else False
-        )
+    def create(self, request):
+        """데이터 수집 작업 시작 (POST /api/collector/trigger/)"""
+        try:
+            source_id = (
+                request.data.get('source_id') or
+                request.query_params.get('source_id')
+            )
+            source_id = int(source_id) if source_id else None
+            source_name = (
+                request.data.get('source_name') or
+                request.query_params.get('source_name')
+            )
+            source_name = source_name.strip() if source_name else None
+            collect_all = (
+                request.data.get('collect_all') or
+                request.query_params.get('collect_all')
+            )
+            collect_all = (
+                str(collect_all).lower() == 'true' if collect_all else False
+            )
 
-        if collect_all or (not source_id and not source_name):
-            task_result = collect_all_rss_news_task.delay()
-            logger.info(f"전체 소스 수집 태스크 시작 (Task ID: {task_result.id})")
+            # 엄격한 검증: collect_all과 source_id/source_name을 동시에 사용할 수 없음
+            if collect_all and (source_id or source_name):
+                return Response({
+                    'status': 'error',
+                    'message': (
+                        'collect_all과 source_id/source_name을 '
+                        '동시에 사용할 수 없습니다.'
+                    )
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            elif collect_all or (not source_id and not source_name):
+                # 전체 수집: collect_all이 True이거나 파라미터가 모두 없을 때
+                task_result = collect_all_rss_news_task.delay()
+                logger.info(f"전체 소스 수집 태스크 시작 (Task ID: {task_result.id})")
+                return Response({
+                    'status': 'started',
+                    'task_id': task_result.id,
+                    'message': '모든 활성화된 소스에서 수집 작업이 시작되었습니다.',
+                    'collect_all': True
+                }, status=status.HTTP_202_ACCEPTED)
+
+            # 특정 소스 수집: source_id 또는 source_name이 있을 때
+            elif source_id or source_name:
+                task_result = collect_rss_news_task.delay(
+                    source_id=source_id, source_name=source_name
+                )
+                logger.info(
+                    f"소스 수집 태스크 시작: source_id={source_id}, "
+                    f"source_name={source_name} (Task ID: {task_result.id})"
+                )
+                return Response({
+                    'status': 'started',
+                    'task_id': task_result.id,
+                    'message': '수집 작업이 시작되었습니다.',
+                    'source_id': source_id,
+                    'source_name': source_name
+                }, status=status.HTTP_202_ACCEPTED)
+
+        except ValueError as e:
+            logger.error(f"수집 작업 트리거 실패: 잘못된 파라미터 - {str(e)}")
             return Response({
-                'status': 'started',
-                'task_id': task_result.id,
-                'message': '모든 활성화된 소스에서 수집 작업이 시작되었습니다.',
-                'collect_all': True
-            }, status=status.HTTP_202_ACCEPTED)
-
-        task_result = collect_rss_news_task.delay(
-            source_id=source_id, source_name=source_name
-        )
-        logger.info(
-            f"소스 수집 태스크 시작: source_id={source_id}, "
-            f"source_name={source_name} (Task ID: {task_result.id})"
-        )
-        return Response({
-            'status': 'started',
-            'task_id': task_result.id,
-            'message': '수집 작업이 시작되었습니다.',
-            'source_id': source_id,
-            'source_name': source_name
-        }, status=status.HTTP_202_ACCEPTED)
-
-    except ValueError as e:
-        logger.error(f"수집 작업 트리거 실패: 잘못된 파라미터 - {str(e)}")
-        return Response({
-            'status': 'error',
-            'message': f'잘못된 파라미터: {str(e)}'
-        }, status=status.HTTP_400_BAD_REQUEST)
-    except Exception as e:
-        logger.error(f"수집 작업 트리거 실패: {str(e)}", exc_info=True)
-        return Response({
-            'status': 'error',
-            'message': f'수집 작업 시작 실패: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                'status': 'error',
+                'message': f'잘못된 파라미터: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"수집 작업 트리거 실패: {str(e)}", exc_info=True)
+            return Response({
+                'status': 'error',
+                'message': f'수집 작업 시작 실패: {str(e)}'
+            }, status=status.HTTP_404_NOT_FOUND)

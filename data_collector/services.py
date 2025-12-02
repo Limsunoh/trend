@@ -7,7 +7,8 @@
 import logging
 import feedparser
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
+from urllib.parse import urlparse
 from django.utils import timezone
 from common.redis_services import (
     DuplicatePreventionService,
@@ -286,7 +287,7 @@ class RSSCollectorService:
                         url=article_url,
                         defaults={
                             'source': source,
-                            'title': article.get('title', '')[:500],  # 제목 길이 제한
+                            'title': article.get('title', ''),
                             'description': article.get('description', ''),
                             'author': article.get('author', '')[:200] if article.get('author') else '',
                             'category': article.get('category', '')[:100] if article.get('category') else '',
@@ -443,4 +444,94 @@ class RSSCollectorService:
                 'sources_count': len(results),
                 'results': results
             }
+
+    def create_source_from_rss(
+        self,
+        rss_url: str,
+        name: Optional[str] = None,
+        is_active: bool = True,
+        collection_interval: int = 60
+    ) -> Tuple[Optional[NewsSource], str, Dict]:
+        """
+        RSS URL로부터 NewsSource를 생성하는 메서드
+
+        RSS 피드를 파싱하여 소스 정보를 추출하고 NewsSource를 생성합니다.
+        이미 존재하는 URL인 경우 기존 소스를 반환합니다.
+
+        Args:
+            rss_url: RSS 피드 URL
+            name: 소스 이름 (선택, 없으면 자동 추출)
+            is_active: 활성화 여부 (기본값: True)
+            collection_interval: 수집 주기(분) (기본값: 60)
+
+        Returns:
+            (source, status, result_dict) 튜플:
+            - source: 생성된 또는 기존 NewsSource 객체 (실패 시 None)
+            - status: 'created' | 'exists' | 'error'
+            - result_dict: 상세 결과 딕셔너리
+
+        사용 예시:
+            collector = RSSCollectorService()
+            source, status, result = collector.create_source_from_rss(
+                'https://www.khan.co.kr/rss/rssdata/total_news.xml'
+            )
+            if status == 'created':
+                print(f"생성 완료: {source.name}")
+        """
+        try:
+            # RSS 피드 파싱하여 정보 추출
+            feed = feedparser.parse(rss_url)
+
+            if feed.bozo and feed.bozo_exception:
+                error_msg = (
+                    f'유효하지 않은 RSS 피드입니다: '
+                    f'{str(feed.bozo_exception)}'
+                )
+                self.logger.error(error_msg)
+                return None, 'error', {'message': error_msg}
+
+            # 소스 이름 추출 (피드 제목 또는 도메인명)
+            parsed_url = urlparse(rss_url)
+            source_name = (
+                name or
+                feed.feed.get('title', '').strip() or
+                parsed_url.netloc.replace('www.', '')
+            )
+
+            if not source_name:
+                domain = parsed_url.netloc
+                source_name = f"RSS Source {domain}"
+
+            # 이미 존재하는 소스인지 확인
+            if NewsSource.objects.filter(url=rss_url).exists():
+                existing_source = NewsSource.objects.get(url=rss_url)
+                self.logger.info(
+                    f"이미 등록된 RSS 소스: {existing_source.name} "
+                    f"({rss_url})"
+                )
+                return existing_source, 'exists', {
+                    'message': '이미 등록된 RSS 소스입니다.'
+                }
+
+            # NewsSource 생성
+            source = NewsSource.objects.create(
+                name=source_name,
+                url=rss_url,
+                source_type='rss',
+                is_active=is_active,
+                collection_interval=collection_interval
+            )
+
+            self.logger.info(
+                f"RSS 소스 자동 생성: {source_name} ({rss_url})"
+            )
+
+            return source, 'created', {
+                'message': 'RSS 소스가 성공적으로 생성되었습니다.'
+            }
+
+        except Exception as e:
+            error_msg = f'RSS 소스 생성 실패: {str(e)}'
+            self.logger.error(error_msg, exc_info=True)
+            return None, 'error', {'message': error_msg}
 
