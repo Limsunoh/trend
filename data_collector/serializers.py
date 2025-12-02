@@ -123,7 +123,7 @@ class NewsSourceSerializer(serializers.ModelSerializer):
         
         Args:
             data: 검증할 전체 데이터 딕셔너리
-                예: {'name': '경향신문', 'url': 'https://...', 'source_type': 'rss', ...}
+                예: {'name': '경향신문', 'url': 'https://...', 'source_type': 'rss'...}
             
         Returns:
             검증된 데이터 딕셔너리 (필요시 값 수정 후 반환)
@@ -467,16 +467,6 @@ class DataCollectionJobSerializer(serializers.ModelSerializer):
             'items_collected',
             'error_message',
         ]
-        
-        # 필드별 추가 설정
-        # 모든 필드(status, items_collected, error_message 등)의 help_text와 기본 설정들은
-        # 모델에서 이미 정의되어 있으므로 DRF가 자동으로 상속받습니다.
-        # 따라서 Serializer에서 중복 정의할 필요가 없습니다.
-        # 
-        # extra_kwargs는 다음과 같은 경우에만 사용합니다:
-        # - Serializer에서만 필요한 추가 설정
-        # - 모델과 다른 동작이 필요한 경우
-        # - 현재는 모든 설정이 모델에서 충분하므로 빈 딕셔너리로 유지
         extra_kwargs = {}
     
     def get_source_name(self, obj):
