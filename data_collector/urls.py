@@ -9,11 +9,12 @@ from .views import (
 )
 
 router = DefaultRouter()
-# TODO: ViewSet 등록
-# router.register(r'sources', NewsSourceViewSet)
-# router.register(r'news', NewsArticleViewSet)
-# router.register(r'social', SocialMediaPostViewSet)
-# router.register(r'jobs', DataCollectionJobViewSet)
+# ViewSet 등록
+# 각 ViewSet은 자동으로 CRUD 엔드포인트를 생성합니다.
+router.register(r'sources', NewsSourceViewSet, basename='source')
+router.register(r'news', NewsArticleViewSet, basename='news')
+router.register(r'social', SocialMediaPostViewSet, basename='social')
+router.register(r'jobs', DataCollectionJobViewSet, basename='job')
 
 urlpatterns = [
     # 경향신문 RSS 수집 트리거 엔드포인트
