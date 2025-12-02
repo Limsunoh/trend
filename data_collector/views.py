@@ -15,12 +15,15 @@ from .serializers import (
     DataCollectionJobSerializer
 )
 from .tasks import collect_rss_news_task, collect_all_rss_news_task
+from celery.result import AsyncResult
 
 logger = logging.getLogger(__name__)
 
 
 def filter_queryset_by_params(
-    queryset: QuerySet, request, filters: dict
+    queryset: QuerySet,
+    request,
+    filters: dict
 ) -> QuerySet:
     """
     쿼리 파라미터로 쿼리셋 필터링 헬퍼 함수
@@ -58,18 +61,21 @@ class NewsSourceViewSet(viewsets.ModelViewSet):
     ordering = ['-created_at']
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = NewsSource.objects.all()
         return filter_queryset_by_params(
             queryset, self.request,
             {'is_active': 'bool', 'source_type': 'str'}
         )
-    
+
     @action(detail=True, methods=['post'])
     def collect(self, request, pk=None):
         """특정 소스에서 데이터 수집 시작"""
-        source = self.get_object()
+        source = NewsSource.objects.get(pk=pk)
         try:
-            task_result = collect_rss_news_task.delay(source_id=source.id)
+            # Celery 태스크는 비동기 실행을 위해 delay() 사용
+            task_result: AsyncResult = collect_rss_news_task.delay(
+                source_id=source.id
+            )
             logger.info(
                 f"소스 수집 태스크 시작: {source.name} "
                 f"(ID: {source.id}, Task ID: {task_result.id})"
@@ -92,29 +98,6 @@ class NewsSourceViewSet(viewsets.ModelViewSet):
                 'source': source.name
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=True, methods=['get'])
-    def articles(self, request, pk=None):
-        """특정 소스의 기사 목록 조회"""
-        source = self.get_object()
-        limit = int(request.query_params.get('limit', 20))
-        offset = int(request.query_params.get('offset', 0))
-        ordering = request.query_params.get('ordering', '-published_at')
-        
-        articles = NewsArticle.objects.filter(
-            source=source
-        ).order_by(ordering)
-        total_count = articles.count()
-        articles = articles[offset:offset + limit]
-
-        return Response({
-            'source': source.name,
-            'source_id': source.id,
-            'total_count': total_count,
-            'limit': limit,
-            'offset': offset,
-            'articles': NewsArticleSerializer(articles, many=True).data
-        })
-
 
 class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
     """뉴스 기사 ViewSet (읽기 전용)"""
@@ -126,18 +109,16 @@ class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ['-published_at', '-collected_at']
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        # source 필터링 (int 타입)
-        source_id = self.request.query_params.get('source', None)
-        if source_id:
-            try:
-                queryset = queryset.filter(source_id=int(source_id))
-            except ValueError:
-                pass
-        # 나머지 필터링
+        queryset = NewsArticle.objects.all()
         queryset = filter_queryset_by_params(
             queryset, self.request,
-            {'category': 'str', 'is_processed': 'bool'}
+            {
+                'source': 'int',
+                'category': 'str',
+                'is_processed': 'bool',
+                'title': 'str',
+                'author': 'str'
+            }
         )
         return queryset.select_related('source')
 
@@ -157,17 +138,10 @@ class DataCollectionJobViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ['-started_at']
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        # source 필터링 (int 타입)
-        source_id = self.request.query_params.get('source', None)
-        if source_id:
-            try:
-                queryset = queryset.filter(source_id=int(source_id))
-            except ValueError:
-                pass
-        # status 필터링
+        queryset = DataCollectionJob.objects.all()
         queryset = filter_queryset_by_params(
-            queryset, self.request, {'status': 'str'}
+            queryset, self.request,
+            {'source': 'int', 'status': 'str'}
         )
         return queryset.select_related('source')
 
