@@ -11,7 +11,7 @@ urlpatterns = [
     path('api/dashboard/', include('dashboard.urls')),
     path('api/analyzer/', include('analyzer.urls')),
     path('api/collector/', include('data_collector.urls')),
-    path('api/user_qa/', include('qa.urls')),
+    path('api/user_qa/', include('user_qa.urls')),
 ]
 
 if settings.DEBUG:
