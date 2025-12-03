@@ -122,18 +122,18 @@ def collect_all_rss_news_task():
             result = collect_rss_news_task.delay(source_id=source.id)
             started_tasks.append({
                 'source_id': source.id,
-                'source_name': source.name,
+                'source_name': str(source),
                 'task_id': result.id
             })
-            logger.info(f"수집 태스크 시작: {source.name} (Task ID: {result.id})")
+            logger.info(f"수집 태스크 시작: {str(source)} (Task ID: {result.id})")
         except Exception as e:
             failed_sources.append({
                 'source_id': source.id,
-                'source_name': source.name,
+                'source_name': str(source),
                 'error': str(e)
             })
             logger.error(
-                f"수집 태스크 시작 실패: {source.name} - {str(e)}",
+                f"수집 태스크 시작 실패: {str(source)} - {str(e)}",
                 exc_info=True
             )
     

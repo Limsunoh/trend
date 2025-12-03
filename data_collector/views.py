@@ -59,31 +59,29 @@ def filter_queryset_by_params(
 class NewsSourceCreateCSVViewSet(viewsets.ViewSet):
     """CSV 파일에서 NewsSource를 일괄 생성하는 ViewSet"""
 
-    def create(self, request):
+    def _load_sources_from_csv(self, csv_file_path: str = None) -> dict:
         """
-        CSV 파일에서 NewsSource를 일괄 생성
+        CSV 파일에서 NewsSource를 생성하는 헬퍼 함수
         
-        요청 파라미터:
-            - csv_file: CSV 파일 경로 (선택, 없으면 기본 경로 사용)
-            - load_csv: true/false (선택)
+        Args:
+            csv_file_path: CSV 파일 경로 (None이면 기본 경로 사용)
+        
+        Returns:
+            결과 딕셔너리 (created, updated, skipped, errors, sources, error_details)
         """
         results = {
             'created': 0,
             'updated': 0,
             'skipped': 0,
             'errors': 0,
-            'sources': []
+            'sources': [],
+            'error_details': []  # 오류 상세 정보 추가
         }
 
         try:
             # CSV 파일 경로 결정
-            csv_file = (
-                request.data.get('csv_file') or
-                request.query_params.get('csv_file')
-            )
-
-            if csv_file:
-                csv_path = csv_file
+            if csv_file_path:
+                csv_path = csv_file_path
             else:
                 # 기본 경로: 프로젝트 루트의 NewsSource_RSS.csv
                 csv_path = os.path.join(
@@ -94,11 +92,8 @@ class NewsSourceCreateCSVViewSet(viewsets.ViewSet):
             # CSV 파일 경로 확인
             if not os.path.exists(csv_path):
                 logger.error(f"CSV 파일을 찾을 수 없습니다: {csv_path}")
-                return Response({
-                    'status': 'error',
-                    'message': f'CSV 파일을 찾을 수 없습니다: {csv_path}',
-                    'results': results
-                }, status=status.HTTP_400_BAD_REQUEST)
+                results['errors'] = 1
+                return results
 
             # CSV 파일 읽기
             with open(csv_path, 'r', encoding='utf-8') as f:
@@ -107,37 +102,57 @@ class NewsSourceCreateCSVViewSet(viewsets.ViewSet):
                 for row in reader:
                     try:
                         publisher = row.get('publisher', '').strip()
-                        title = row.get('title', '').strip()
+                        category = row.get('title', '').strip()  # CSV의 title이 카테고리
                         url = row.get('url', '').strip()
 
                         # 필수 필드 검증
-                        if not publisher or not title or not url:
+                        if not publisher or not url:
                             logger.warning(
                                 f"필수 필드가 없는 행 건너뜀: {row}"
                             )
                             results['skipped'] += 1
                             continue
 
-                        # 소스 이름 생성: publisher + title 조합
-                        source_name = f"{publisher} - {title}"
-
-                        # URL이 이미 존재하는지 확인
+                        # 1. URL로 먼저 확인 (가장 정확)
                         existing_source = (
                             NewsSource.objects.filter(url=url).first()
                         )
 
+                        # 2. URL이 없으면 publisher + category로 확인
+                        if not existing_source:
+                            existing_source = (
+                                NewsSource.objects.filter(
+                                    publisher=publisher,
+                                    category=category
+                                ).first()
+                            )
+
                         if existing_source:
                             # 기존 소스 업데이트
-                            # (이름이 변경되었을 수 있음)
-                            if existing_source.name != source_name:
-                                existing_source.name = source_name
-                                existing_source.save(
-                                    update_fields=['name']
-                                )
+                            updated_fields = []
+                            
+                            # URL이 다르면 업데이트
+                            if existing_source.url != url:
+                                existing_source.url = url
+                                updated_fields.append('url')
+                            
+                            # publisher가 다르면 업데이트
+                            if existing_source.publisher != publisher:
+                                existing_source.publisher = publisher
+                                updated_fields.append('publisher')
+                            
+                            # category가 다르면 업데이트
+                            if existing_source.category != category:
+                                existing_source.category = category
+                                updated_fields.append('category')
+                            
+                            if updated_fields:
+                                existing_source.save(update_fields=updated_fields)
                                 logger.info(
-                                    f"소스 이름 업데이트: {source_name} "
-                                    f"({url})"
+                                    f"소스 업데이트: {publisher} - {category} ({url}) - "
+                                    f"변경된 필드: {', '.join(updated_fields)}"
                                 )
+                            
                             results['updated'] += 1
                             serializer = NewsSourceSerializer(
                                 existing_source
@@ -145,27 +160,58 @@ class NewsSourceCreateCSVViewSet(viewsets.ViewSet):
                             results['sources'].append(serializer.data)
                         else:
                             # 새 소스 생성
-                            with transaction.atomic():
-                                source = NewsSource.objects.create(
-                                    name=source_name,
-                                    url=url,
-                                    source_type='rss',
-                                    is_active=True,
-                                    collection_interval=60
-                                )
-                                results['created'] += 1
-                                serializer = NewsSourceSerializer(source)
-                                results['sources'].append(serializer.data)
-                                logger.info(
-                                    f"새 소스 생성: {source_name} ({url})"
-                                )
+                            try:
+                                with transaction.atomic():
+                                    source = NewsSource.objects.create(
+                                        publisher=publisher,
+                                        category=category if category else None,
+                                        url=url,
+                                        source_type='rss',
+                                        is_active=True,
+                                        collection_interval=60
+                                    )
+                                    results['created'] += 1
+                                    serializer = NewsSourceSerializer(source)
+                                    results['sources'].append(serializer.data)
+                                    logger.info(
+                                        f"새 소스 생성: {publisher} - {category} ({url})"
+                                    )
+                            except Exception as create_error:
+                                # 중복 오류인 경우, 기존 것을 찾아서 업데이트
+                                if 'unique' in str(create_error).lower() or 'duplicate' in str(create_error).lower():
+                                    existing_by_pub_cat = (
+                                        NewsSource.objects.filter(
+                                            publisher=publisher,
+                                            category=category
+                                        ).first()
+                                    )
+                                    if existing_by_pub_cat:
+                                        existing_by_pub_cat.url = url
+                                        existing_by_pub_cat.save(update_fields=['url'])
+                                        results['updated'] += 1
+                                        logger.info(
+                                            f"중복으로 인한 업데이트: {publisher} - {category} "
+                                            f"(URL 변경: {url})"
+                                        )
+                                        continue
+                                # 다른 오류면 다시 raise
+                                raise
 
                     except Exception as e:
+                        error_msg = str(e)
                         logger.error(
-                            f"소스 생성 오류 (행: {row}): {str(e)}",
+                            f"소스 생성 오류 (행: {row}): {error_msg}",
                             exc_info=True
                         )
                         results['errors'] += 1
+                        # 오류 상세 정보 저장
+                        results['error_details'].append({
+                            'row': row,
+                            'error': error_msg,
+                            'publisher': row.get('publisher', ''),
+                            'title': row.get('title', ''),
+                            'url': row.get('url', '')
+                        })
                         continue
 
             logger.info(
@@ -175,30 +221,52 @@ class NewsSourceCreateCSVViewSet(viewsets.ViewSet):
                 f"오류={results['errors']}"
             )
 
-            message = (
-                f'CSV 파일에서 {results["created"]}개 소스 생성, '
-                f'{results["updated"]}개 업데이트'
-            )
-
-            return Response({
-                'status': 'completed',
-                'message': message,
-                'results': results
-            }, status=status.HTTP_201_CREATED)
-
         except Exception as e:
             logger.error(
                 f"CSV 파일 읽기 오류: {str(e)}",
                 exc_info=True
             )
+            results['errors'] = 1
+
+        return results
+
+    def create(self, request):
+        """
+        CSV 파일에서 NewsSource를 일괄 생성
+        
+        요청 파라미터:
+            - csv_file: CSV 파일 경로 (선택, 없으면 기본 경로 사용)
+        """
+        # CSV 파일 경로 결정
+        csv_file = (
+            request.data.get('csv_file') or
+            request.query_params.get('csv_file')
+        )
+
+        # CSV 파일 로드
+        results = self._load_sources_from_csv(csv_file)
+
+        # 응답 생성
+        if results['errors'] > 0 and results['created'] == 0 and results['updated'] == 0:
             return Response({
                 'status': 'error',
-                'message': f'CSV 파일 처리 중 오류 발생: {str(e)}',
+                'message': 'CSV 파일 처리 중 오류 발생',
                 'results': results
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        message = (
+            f'CSV 파일에서 {results["created"]}개 소스 생성, '
+            f'{results["updated"]}개 업데이트'
+        )
+
+        return Response({
+            'status': 'completed',
+            'message': message,
+            'results': results
+        }, status=status.HTTP_201_CREATED)
 
 
-class RSSSourceCreationViewSet(viewsets.ViewSet):
+class ArticleCreateViewSet(viewsets.ViewSet):
     """RSS URL로부터 NewsSource 자동 생성 ViewSet"""
 
     def create(self, request):
@@ -266,25 +334,25 @@ class NewsSourceViewSet(viewsets.ModelViewSet):
                 source_id=source.id
             )
             logger.info(
-                f"소스 수집 태스크 시작: {source.name} "
+                f"소스 수집 태스크 시작: {str(source)} "
                 f"(ID: {source.id}, Task ID: {task_result.id})"
             )
             return Response({
                 'status': 'started',
                 'task_id': task_result.id,
-                'message': f'{source.name}에서 수집 작업이 시작되었습니다.',
-                'source': source.name,
+                'message': f'{str(source)}에서 수집 작업이 시작되었습니다.',
+                'source': str(source),
                 'source_id': source.id
             }, status=status.HTTP_202_ACCEPTED)
         except Exception as e:
             logger.error(
-                f"소스 수집 태스크 시작 실패: {source.name} - {str(e)}",
+                f"소스 수집 태스크 시작 실패: {str(source)} - {str(e)}",
                 exc_info=True
             )
             return Response({
                 'status': 'error',
                 'message': f'수집 작업 시작 실패: {str(e)}',
-                'source': source.name
+                'source': str(source)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
