@@ -93,8 +93,9 @@ DATABASES = {
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
         'OPTIONS': {
-            'connect_timeout': 10,
+            'connect_timeout': 60,
             'client_encoding': 'UTF8',
+            'options': '-c client_encoding=UTF8',
         },
     }
 }

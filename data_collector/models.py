@@ -7,19 +7,31 @@ class NewsSource(models.Model):
     뉴스 소스 정보 모델
     
     RSS 피드나 API를 통해 뉴스를 수집하는 소스의 정보를 저장합니다.
-    각 소스는 고유한 이름과 URL을 가지며, 활성화/비활성화 상태를 관리할 수 있습니다.
+    각 소스는 신문사(publisher)와 카테고리(category)를 가지며, 고유한 URL을 가집니다.
     """
-    # 소스 이름 (예: '경향신문', '조선일보' 등)
-    name = models.CharField(
+    # 신문사 이름 (예: '경향신문', '조선일보' 등)
+    publisher = models.CharField(
         max_length=100,
-        unique=True,
-        verbose_name='소스 이름',
-        help_text='뉴스 소스의 이름입니다. 예: 경향신문'
+        verbose_name='신문사',
+        help_text='뉴스 소스의 신문사 이름입니다. 예: 경향신문',
+        db_index=True,
+        default='Unknown'
+    )
+    
+    # 카테고리 (예: '정치', '경제', '사회' 등)
+    category = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name='카테고리',
+        help_text='뉴스 카테고리 (예: 정치, 경제, 사회 등)',
+        db_index=True
     )
     
     # RSS 피드 URL 또는 API 엔드포인트
     url = models.URLField(
         max_length=500,
+        unique=True,
         verbose_name='URL',
         help_text='RSS 피드 URL 또는 API 엔드포인트 주소'
     )
@@ -74,10 +86,14 @@ class NewsSource(models.Model):
     class Meta:
         verbose_name = '뉴스 소스'
         verbose_name_plural = '뉴스 소스'
-        ordering = ['-created_at']
+        ordering = ['publisher', 'category', '-created_at']
+        # 같은 신문사의 같은 카테고리는 하나만 (URL이 다르면 별도 소스)
+        unique_together = [['publisher', 'category', 'url']]
     
     def __str__(self):
-        return f"{self.name} ({self.source_type})"
+        if self.category:
+            return f"{self.publisher} - {self.category}"
+        return f"{self.publisher}"
 
 
 class NewsArticle(models.Model):
@@ -181,7 +197,7 @@ class NewsArticle(models.Model):
         ]
     
     def __str__(self):
-        return f"{self.title[:50]}... ({self.source.name})"
+        return f"{self.title[:50]}... ({str(self.source)})"
 
 
 class SocialMediaPost(models.Model):
@@ -261,5 +277,5 @@ class DataCollectionJob(models.Model):
         ordering = ['-started_at']
     
     def __str__(self):
-        source_name = self.source.name if self.source else 'Unknown'
+        source_name = str(self.source) if self.source else 'Unknown'
         return f"{source_name} - {self.get_status_display()} ({self.started_at})"

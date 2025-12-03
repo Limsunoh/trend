@@ -228,11 +228,13 @@ class NewsArticleSerializer(serializers.ModelSerializer):
     
     # 소스 이름 (간단한 참조)
     # 소스의 전체 정보가 필요 없을 때는 이름만 표시
-    source_name = serializers.CharField(
-        source='source.name',
+    source_name = serializers.SerializerMethodField(
         read_only=True,
         help_text='뉴스 소스 이름'
     )
+    
+    def get_source_name(self, obj):
+        return str(obj.source) if obj.source else 'Unknown'
     
     # 제목 요약 (긴 제목을 짧게)
     title_short = serializers.SerializerMethodField(
@@ -481,7 +483,7 @@ class DataCollectionJobSerializer(serializers.ModelSerializer):
         Returns:
             소스 이름 또는 "Unknown"
         """
-        return obj.source.name if obj.source else 'Unknown'
+        return str(obj.source) if obj.source else 'Unknown'
     
     def get_duration(self, obj):
         """
