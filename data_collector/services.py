@@ -227,17 +227,17 @@ class RSSCollectorService:
                     'status': 'rate_limited',
                     'message': error_msg,
                     'reset_at': limit_check['reset_at'].isoformat(),
-                    'source': source.name,
+                    'source': str(source),
                     'items_collected': 0
                 }
             
             # RSS 피드 파싱
-            self.logger.info(f"RSS 피드 수집 시작: {source.name} ({source.url})")
+            self.logger.info(f"RSS 피드 수집 시작: {str(source)} ({source.url})")
             articles = self.parse_feed(source.url)
             
             if not articles:
                 # 기사가 없는 경우
-                self.logger.warning(f"수집된 기사가 없습니다: {source.name}")
+                self.logger.warning(f"수집된 기사가 없습니다: {str(source)}")
                 
                 if job:
                     job.status = 'completed'
@@ -252,7 +252,7 @@ class RSSCollectorService:
                 return {
                     'status': 'completed',
                     'message': '수집된 기사가 없습니다',
-                    'source': source.name,
+                    'source': str(source),
                     'items_collected': 0
                 }
             
@@ -341,7 +341,7 @@ class RSSCollectorService:
             
             # 결과 로그
             self.logger.info(
-                f"RSS 수집 완료: {source.name} - "
+                f"RSS 수집 완료: {str(source)} - "
                 f"수집: {collected_count}개, "
                 f"건너뜀: {skipped_count}개, "
                 f"오류: {error_count}개"
@@ -371,7 +371,7 @@ class RSSCollectorService:
             return {
                 'status': 'failed',
                 'message': error_msg,
-                'source': source.name if source else 'Unknown',
+                'source': str(source) if source else 'Unknown',
                 'items_collected': 0
             }
     
@@ -417,7 +417,22 @@ class RSSCollectorService:
         elif source_name:
             # source_name으로 소스 조회
             try:
-                source = NewsSource.objects.get(name=source_name, is_active=True)
+                # source_name으로 소스 조회 (publisher 또는 publisher - category 형식)
+                if ' - ' in source_name:
+                    parts = source_name.split(' - ', 1)
+                    source = NewsSource.objects.get(
+                        publisher=parts[0],
+                        category=parts[1] if len(parts) > 1 else None,
+                        is_active=True
+                    )
+                else:
+                    # publisher만 있는 경우 첫 번째 활성 소스 반환
+                    source = NewsSource.objects.filter(
+                        publisher=source_name,
+                        is_active=True
+                    ).first()
+                    if not source:
+                        raise NewsSource.DoesNotExist
                 return self.collect_from_source(source)
             except NewsSource.DoesNotExist:
                 error_msg = f"활성화된 뉴스 소스를 찾을 수 없습니다: 이름={source_name}"
@@ -476,7 +491,7 @@ class RSSCollectorService:
                 'https://www.khan.co.kr/rss/rssdata/total_news.xml'
             )
             if status == 'created':
-                print(f"생성 완료: {source.name}")
+                print(f"생성 완료: {str(source)}")
         """
         try:
             # RSS 피드 파싱하여 정보 추출
@@ -506,7 +521,7 @@ class RSSCollectorService:
             if NewsSource.objects.filter(url=rss_url).exists():
                 existing_source = NewsSource.objects.get(url=rss_url)
                 self.logger.info(
-                    f"이미 등록된 RSS 소스: {existing_source.name} "
+                    f"이미 등록된 RSS 소스: {str(existing_source)} "
                     f"({rss_url})"
                 )
                 return existing_source, 'exists', {
@@ -514,8 +529,18 @@ class RSSCollectorService:
                 }
 
             # NewsSource 생성
+            # source_name이 "publisher - category" 형식이면 분리, 아니면 publisher만
+            if ' - ' in source_name:
+                parts = source_name.split(' - ', 1)
+                publisher = parts[0]
+                category = parts[1] if len(parts) > 1 else None
+            else:
+                publisher = source_name
+                category = None
+            
             source = NewsSource.objects.create(
-                name=source_name,
+                publisher=publisher,
+                category=category,
                 url=rss_url,
                 source_type='rss',
                 is_active=is_active,
