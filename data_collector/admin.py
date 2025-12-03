@@ -19,7 +19,8 @@ class NewsSourceAdmin(admin.ModelAdmin):
     """
     # 목록 페이지에 표시할 필드들
     list_display = [
-        'name',           # 소스 이름
+        'publisher',      # 신문사
+        'category',      # 카테고리
         'source_type',    # 소스 타입 (RSS, API 등)
         'is_active',      # 활성화 여부
         'collection_interval',  # 수집 주기
@@ -30,6 +31,8 @@ class NewsSourceAdmin(admin.ModelAdmin):
     
     # 필터링 옵션 (우측 사이드바)
     list_filter = [
+        'publisher',      # 신문사별 필터
+        'category',      # 카테고리별 필터
         'source_type',    # 소스 타입별 필터
         'is_active',      # 활성화 상태별 필터
         'created_at',     # 생성 시간별 필터
@@ -37,14 +40,15 @@ class NewsSourceAdmin(admin.ModelAdmin):
     
     # 검색 가능한 필드
     search_fields = [
-        'name',  # 소스 이름으로 검색
-        'url',   # URL로 검색
+        'publisher',  # 신문사로 검색
+        'category',   # 카테고리로 검색
+        'url',        # URL로 검색
     ]
     
     # 필드 그룹화 (상세 페이지)
     fieldsets = (
         ('기본 정보', {
-            'fields': ('name', 'url', 'source_type')
+            'fields': ('publisher', 'category', 'url', 'source_type')
         }),
         ('수집 설정', {
             'fields': ('is_active', 'collection_interval')
@@ -187,7 +191,8 @@ class DataCollectionJobAdmin(admin.ModelAdmin):
     
     # 검색 가능한 필드
     search_fields = [
-        'source__name',          # 소스 이름으로 검색
+        'source__publisher',     # 신문사로 검색
+        'source__category',      # 카테고리로 검색
         'error_message',         # 에러 메시지로 검색
     ]
     
