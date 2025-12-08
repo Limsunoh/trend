@@ -282,12 +282,6 @@ class NewsArticleSerializer(serializers.ModelSerializer):
                 'allow_blank': True,
                 'allow_null': True,
             },
-            'content': {
-                'help_text': '뉴스 기사의 전체 본문 내용',
-                'required': False,
-                'allow_blank': True,
-                'allow_null': True,
-            },
             'author': {
                 'help_text': '기사를 작성한 기자 또는 작성자',
                 'required': False,
