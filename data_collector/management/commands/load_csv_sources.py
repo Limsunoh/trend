@@ -2,7 +2,7 @@
 Django management command to load NewsSource from CSV file
 """
 from django.core.management.base import BaseCommand
-from data_collector.views import NewsSourceCreateCSVViewSet
+from data_collector.services import NewsSourceCSVService
 
 
 class Command(BaseCommand):
@@ -16,11 +16,11 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        viewset = NewsSourceCreateCSVViewSet()
+        csv_service = NewsSourceCSVService()
         csv_file = options.get('csv_file')
         
         # CSV 파일 로드
-        results = viewset._load_sources_from_csv(csv_file)
+        results = csv_service.load_sources_from_csv(csv_file)
         
         # 결과 출력
         self.stdout.write("=" * 50)
