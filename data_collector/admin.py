@@ -133,7 +133,7 @@ class NewsArticleAdmin(admin.ModelAdmin):
             'fields': ('source', 'title', 'url', 'category')
         }),
         ('내용', {
-            'fields': ('description', 'content', 'author')
+            'fields': ('description', 'author')
         }),
         ('시간 정보', {
             'fields': ('published_at', 'collected_at')
