@@ -12,8 +12,10 @@
 import logging
 from typing import Optional
 from celery import shared_task
+from django.utils import timezone
 from .services import RSSCollectorService
-from .models import NewsSource
+from .models import NewsSource, CollectionSession, DataCollectionJob
+from .report_service import CollectionReportService
 from common.redis_services import (
     DuplicatePreventionService,
     RateLimitService,
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True, max_retries=3)
-def collect_rss_news_task(self, source_id: Optional[int] = None, source_name: Optional[str] = None):
+def collect_rss_news_task(self, source_id: Optional[int] = None, source_name: Optional[str] = None, session_id: Optional[int] = None):
     """
     RSS 피드 수집 Celery 태스크 (클래스 기반)
     
@@ -41,12 +43,14 @@ def collect_rss_news_task(self, source_id: Optional[int] = None, source_name: Op
     Args:
         source_id: NewsSource 모델의 ID (선택)
         source_name: NewsSource의 이름 (선택, 예: '경향신문')
+        session_id: CollectionSession ID (선택, 세션 통계 업데이트용)
         
     동작 과정:
         1. RSSCollectorService 인스턴스 생성
         2. NewsSource 조회
         3. 서비스 클래스의 collect_from_source() 메서드 호출
         4. 수집 결과 반환
+        5. 세션 통계 업데이트 (session_id가 있는 경우)
         
     재시도 정책:
         - max_retries=3: 최대 3번까지 재시도
@@ -76,12 +80,29 @@ def collect_rss_news_task(self, source_id: Optional[int] = None, source_name: Op
             f"상태: {result.get('status')}"
         )
         
+        # 세션 통계 업데이트
+        if session_id:
+            try:
+                session = CollectionSession.objects.get(id=session_id)
+                _update_session_stats(session, result)
+            except CollectionSession.DoesNotExist:
+                logger.warning(f"세션을 찾을 수 없습니다: session_id={session_id}")
+        
         return result
         
     except Exception as e:
         # 작업 실패 처리
         error_msg = f"RSS 수집 태스크 실패: {str(e)}"
         logger.error(error_msg, exc_info=True)
+        
+        # 세션 통계 업데이트 (실패)
+        if session_id:
+            try:
+                session = CollectionSession.objects.get(id=session_id)
+                session.failed_sources += 1
+                session.save()
+            except CollectionSession.DoesNotExist:
+                pass
         
         # Celery 재시도
         # 네트워크 오류 등 일시적 오류의 경우 재시도합니다.
@@ -102,30 +123,47 @@ def collect_all_rss_news_task():
     각 소스는 별도의 비동기 태스크로 실행되므로,
     여러 소스를 동시에 수집할 수 있습니다.
     
+    수집이 완료되면 자동으로 리포트(JSON, 마크다운)를 생성합니다.
+    
     사용 예시:
         # 모든 활성화된 소스 수집 시작
         collect_all_rss_news_task.delay()
     """
+    # 수집 세션 생성
+    session = CollectionSession.objects.create(
+        status='running',
+        started_at=timezone.now()
+    )
+    
     # 활성화된 모든 RSS 소스 조회
     news_sources = NewsSource.objects.filter(
         is_active=True,
         source_type='rss'
     )
     
+    session.total_sources = news_sources.count()
+    session.save()
+    
     started_tasks = []
     failed_sources = []
     
     for source in news_sources:
         try:
-            # 각 소스에 대해 수집 태스크 호출
+            # 각 소스에 대해 수집 태스크 호출 (session_id 전달)
             # delay()를 사용하여 비동기로 실행합니다.
-            result = collect_rss_news_task.delay(source_id=source.id)
+            result = collect_rss_news_task.delay(
+                source_id=source.id,
+                session_id=session.id
+            )
             started_tasks.append({
                 'source_id': source.id,
                 'source_name': str(source),
                 'task_id': result.id
             })
-            logger.info(f"수집 태스크 시작: {str(source)} (Task ID: {result.id})")
+            logger.info(
+                f"수집 태스크 시작: {str(source)} "
+                f"(Task ID: {result.id}, Session ID: {session.id})"
+            )
         except Exception as e:
             failed_sources.append({
                 'source_id': source.id,
@@ -136,14 +174,110 @@ def collect_all_rss_news_task():
                 f"수집 태스크 시작 실패: {str(source)} - {str(e)}",
                 exc_info=True
             )
+            # 실패한 소스 카운트 증가
+            session.failed_sources += 1
+            session.save()
+    
+    logger.info(
+        f"수집 세션 시작: Session ID={session.id}, "
+        f"총 {session.total_sources}개 소스"
+    )
+    
+    # 세션 완료 체크 및 리포트 생성 태스크 예약
+    # 모든 작업이 완료된 후 리포트를 생성하기 위해 체크 태스크를 실행
+    check_session_completion.delay(session.id)
     
     return {
         'status': 'started',
+        'session_id': session.id,
         'sources_count': news_sources.count(),
         'started_tasks': started_tasks,
         'failed_sources': failed_sources,
         'message': f'{len(started_tasks)}개 뉴스 소스에 대한 수집 태스크를 시작했습니다.'
     }
+
+
+def _update_session_stats(session: CollectionSession, result: dict):
+    """세션 통계 업데이트"""
+    status = result.get('status', '')
+    
+    if status == 'completed':
+        session.successful_sources += 1
+        session.total_articles_collected += result.get('items_collected', 0)
+        session.total_articles_skipped += result.get('items_skipped', 0)
+        session.total_articles_error += result.get('items_error', 0)
+    elif status in ['failed', 'rate_limited']:
+        session.failed_sources += 1
+    
+    session.save()
+
+
+@shared_task
+def check_session_completion(session_id: int):
+    """
+    세션 완료 여부를 체크하고, 완료되었으면 리포트 생성
+    
+    모든 작업이 완료되었는지 확인하고, 완료되면 리포트를 생성합니다.
+    """
+    from datetime import timedelta
+    
+    try:
+        session = CollectionSession.objects.get(id=session_id)
+    except CollectionSession.DoesNotExist:
+        logger.error(f"세션을 찾을 수 없습니다: session_id={session_id}")
+        return
+    
+    # 세션 시작 이후의 작업 확인
+    jobs = DataCollectionJob.objects.filter(
+        started_at__gte=session.started_at
+    )
+    
+    completed_jobs = jobs.filter(status='completed').count()
+    failed_jobs = jobs.filter(status='failed').count()
+    running_jobs = jobs.filter(status='running').count()
+    
+    # 모든 작업 완료 여부 확인
+    time_since_start = timezone.now() - session.started_at
+    all_tasks_done = (
+        running_jobs == 0 and
+        (completed_jobs + failed_jobs) >= session.total_sources
+    )
+    
+    # 2시간 이상 경과했거나 모든 작업이 완료되면 완료 처리
+    if all_tasks_done or time_since_start > timedelta(hours=2):
+        if session.status == 'running':
+            session.mark_completed()
+            
+            # 리포트 생성
+            try:
+                report_service = CollectionReportService()
+                reports = report_service.generate_all_reports(session)
+                
+                session.json_report_path = reports['json_path']
+                session.markdown_report_path = reports['markdown_path']
+                session.save()
+                
+                logger.info(
+                    f"세션 #{session.id} 완료 및 리포트 생성: "
+                    f"JSON={reports['json_path']}, "
+                    f"Markdown={reports['markdown_path']}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"리포트 생성 실패 (Session ID={session.id}): {str(e)}",
+                    exc_info=True
+                )
+    else:
+        # 아직 완료되지 않았으면 5분 후 다시 체크
+        remaining = session.total_sources - (completed_jobs + failed_jobs)
+        logger.info(
+            f"세션 #{session.id} 아직 진행 중. "
+            f"남은 작업: 약 {remaining}개. 5분 후 다시 체크합니다."
+        )
+        check_session_completion.apply_async(
+            args=[session_id],
+            countdown=300  # 5분 후
+        )
 
 
 @shared_task
