@@ -14,6 +14,7 @@ app = Celery('trend_analyzer')
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Load task modules from all registered Django apps.
+# Django 설정이 로드된 후에 autodiscover_tasks를 호출해야 함
 app.autodiscover_tasks()
 
 
