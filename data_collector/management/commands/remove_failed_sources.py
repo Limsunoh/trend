@@ -106,19 +106,21 @@ class Command(BaseCommand):
                 )
                 
                 if is_rss_error:
+                    # 개수만 필요하므로 count() 사용 (더 효율적)
                     failed_sources.append({
                         'source': source,
                         'reason': f'RSS 피드 오류: {error_reasons[0][:100] if error_reasons else "알 수 없음"}',
-                        'jobs': list(failed_jobs[:3])  # 최근 3개만
+                        'jobs_count': failed_jobs.count()  # 전체 실패 작업 개수
                     })
             elif zero_article_jobs.count() >= recent_jobs.count() and recent_jobs.count() >= 2:
                 # 최근 작업이 모두 0개 기사이고, 2회 이상 시도한 경우
                 # RSS 피드 직접 테스트
                 if not self._test_rss_feed(source.url):
+                    # 개수만 필요하므로 count() 사용 (더 효율적)
                     failed_sources.append({
                         'source': source,
                         'reason': '최근 수집 작업에서 기사가 0개였고 RSS 피드 테스트 실패',
-                        'jobs': list(zero_article_jobs[:3])
+                        'jobs_count': zero_article_jobs.count()  # 전체 실패 작업 개수
                     })
         
         # 결과 출력
@@ -141,8 +143,9 @@ class Command(BaseCommand):
             )
             self.stdout.write(f'   URL: {source.url}')
             self.stdout.write(f'   이유: {item["reason"]}')
-            if item['jobs']:
-                self.stdout.write(f'   최근 실패 작업: {len(item["jobs"])}개')
+            jobs_count = item.get('jobs_count', 0)
+            if jobs_count > 0:
+                self.stdout.write(f'   최근 실패 작업: {jobs_count}개')
         
         if test_mode:
             self.stdout.write(
