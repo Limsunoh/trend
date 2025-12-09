@@ -61,6 +61,42 @@ source .venv/Scripts/activate
 celery -A trend_analyzer worker --pool=solo --loglevel=info
 ```
 
+#### 2-2-1. Flower로 Celery 모니터링 (선택사항)
+
+Celery 작업을 웹 브라우저에서 모니터링할 수 있습니다.
+
+**설치:**
+```bash
+pip install flower
+```
+
+**실행:**
+```bash
+# 가상환경 활성화
+source .venv/Scripts/activate
+
+# Flower 실행 (로컬 Redis 사용)
+celery -A trend_analyzer flower
+
+# 원격 Redis 사용
+celery -A trend_analyzer flower --broker=redis://121.148.185.46:6379/0
+
+# 포트 변경 (기본값: 5555)
+celery -A trend_analyzer flower --port=5555
+```
+
+**웹 브라우저에서 접속:**
+```
+http://localhost:5555
+```
+
+**Flower에서 확인할 수 있는 정보:**
+- **Tasks**: 실행 중/완료/실패한 작업 목록 및 상세 정보
+- **Workers**: 연결된 Celery worker 상태
+- **Monitor**: 실시간 작업 모니터링
+- **Broker**: Redis 연결 상태
+- **API**: REST API 엔드포인트
+
 #### 2-3. API로 수집 시작
 
 **방법: Swagger UI 사용**
