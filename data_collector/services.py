@@ -948,6 +948,26 @@ class DCInsideCollectorService:
                             except (ValueError, TypeError):
                                 pass
                         
+                        # 이미지 목록 가져오기
+                        images = post_data.get('images', [])
+                        
+                        # 썸네일 이미지 추출 (첫 번째 이미지를 썸네일로 사용)
+                        thumbnail_url = None
+                        if images and len(images) > 0:
+                            # images가 리스트인 경우 첫 번째 요소 사용
+                            if isinstance(images, list):
+                                first_image = images[0]
+                                # 이미지가 문자열(URL)인 경우
+                                if isinstance(first_image, str):
+                                    thumbnail_url = first_image
+                                # 이미지가 딕셔너리인 경우 URL 필드 확인
+                                elif isinstance(first_image, dict):
+                                    thumbnail_url = (
+                                        first_image.get('url') or
+                                        first_image.get('src') or
+                                        first_image.get('image_url')
+                                    )
+                        
                         # 게시글 저장
                         SocialMediaPost.objects.create(
                             source=source,
@@ -964,7 +984,8 @@ class DCInsideCollectorService:
                             gall_name=gall_name,
                             post_num=str(post_num),
                             ip=post_data.get('ip', ''),
-                            images=post_data.get('images', []),
+                            images=images,
+                            thumbnail_url=thumbnail_url,
                             raw_data=post_data
                         )
                         
