@@ -15,7 +15,7 @@ from common.redis_services import (
     RateLimitService,
     RealtimeStatsService
 )
-from .models import NewsSource, NewsArticle, DataCollectionJob
+from .models import NewsSource, NewsArticle, DataCollectionJob, SocialMediaSource, SocialMediaPost
 
 # 로거 설정
 logger = logging.getLogger(__name__)
@@ -765,4 +765,505 @@ class NewsSourceCSVService:
             results['error_details'].append(f"CSV 파일 읽기 오류: {str(e)}")
 
         return results
+
+
+class DCInsideCollectorService:
+    """
+    DC Inside 갤러리 수집 서비스 클래스
+    
+    DC Inside 갤러리에서 게시글을 수집하여 데이터베이스에 저장하는 서비스입니다.
+    dcapi 패키지를 사용하여 웹 스크래핑을 수행합니다.
+    
+    주요 기능:
+    1. 갤러리 글 목록 수집
+    2. 개별 게시글 상세 정보 수집
+    3. 중복 수집 방지 (URL 기반)
+    4. 수집 작업 로그 기록
+    
+    사용 예시:
+        collector = DCInsideCollectorService()
+        result = collector.collect_from_source(source_id=1)
+    """
+    
+    def __init__(self):
+        """DC Inside 수집 서비스 초기화"""
+        self.logger = logging.getLogger(__name__)
+        try:
+            import dcapi
+            self.dcapi = dcapi
+        except ImportError:
+            self.logger.error("dcapi 패키지가 설치되지 않았습니다.")
+            raise ImportError("dcapi 패키지를 설치하세요: pip install git+https://github.com/Limsunoh/dcinside-read-api.git")
+    
+    def collect_from_source(
+        self,
+        source: Optional[SocialMediaSource] = None,
+        source_id: Optional[int] = None
+    ) -> Dict:
+        """
+        DC Inside 소스에서 게시글을 수집합니다.
+        
+        Args:
+            source: SocialMediaSource 객체 (선택)
+            source_id: SocialMediaSource ID (선택)
+            
+        Returns:
+            수집 결과 딕셔너리:
+            {
+                'status': 'success' | 'error',
+                'source': 소스 이름,
+                'items_collected': 수집된 게시글 수,
+                'items_skipped': 건너뛴 게시글 수,
+                'items_error': 오류 발생 게시글 수,
+                'error_message': 에러 메시지 (있는 경우)
+            }
+        """
+        # 소스 가져오기
+        if source_id:
+            try:
+                source = SocialMediaSource.objects.get(id=source_id, platform='dcinside')
+            except SocialMediaSource.DoesNotExist:
+                error_msg = f"DC Inside 소스를 찾을 수 없습니다 (ID: {source_id})"
+                self.logger.error(error_msg)
+                return {
+                    'status': 'error',
+                    'error_message': error_msg,
+                    'items_collected': 0,
+                    'items_skipped': 0,
+                    'items_error': 0
+                }
+        
+        if not source:
+            error_msg = "소스가 제공되지 않았습니다."
+            self.logger.error(error_msg)
+            return {
+                'status': 'error',
+                'error_message': error_msg,
+                'items_collected': 0,
+                'items_skipped': 0,
+                'items_error': 0
+            }
+        
+        if source.platform != 'dcinside':
+            error_msg = f"DC Inside 소스가 아닙니다 (플랫폼: {source.platform})"
+            self.logger.error(error_msg)
+            return {
+                'status': 'error',
+                'error_message': error_msg,
+                'items_collected': 0,
+                'items_skipped': 0,
+                'items_error': 0
+            }
+        
+        # 갤러리 이름 (identifier에서 가져오기)
+        gall_name = source.identifier
+        
+        self.logger.info(f"DC Inside 수집 시작: {source.display_name} (갤러리: {gall_name})")
+        
+        items_collected = 0
+        items_skipped = 0
+        items_error = 0
+        
+        try:
+            # 1. 갤러리 글 목록 가져오기 (최근 1-3페이지)
+            title_data = self.dcapi.read.title(gall_name, start_page=1, end_page=3)
+            
+            if not title_data:
+                self.logger.warning(f"갤러리 '{gall_name}'에서 글 목록을 가져올 수 없습니다.")
+                return {
+                    'status': 'error',
+                    'source': str(source),
+                    'error_message': '글 목록을 가져올 수 없습니다.',
+                    'items_collected': 0,
+                    'items_skipped': 0,
+                    'items_error': 0
+                }
+            
+            # 2. 각 게시글 상세 정보 수집
+            for page_num, posts in title_data.items():
+                if not posts:
+                    continue
+                
+                for post_info in posts:
+                    post_num = post_info.get('post_num')
+                    if not post_num:
+                        continue
+                    
+                    try:
+                        # 게시글 상세 정보 가져오기
+                        post_data = self.dcapi.read.post(gall_name, post_num)
+                        
+                        if not post_data:
+                            items_error += 1
+                            continue
+                        
+                        # URL 생성
+                        post_url = f"http://gall.dcinside.com/board/view/?id={gall_name}&no={post_num}&page=1"
+                        
+                        # 중복 체크 (URL 기반)
+                        if SocialMediaPost.objects.filter(url=post_url).exists():
+                            items_skipped += 1
+                            continue
+                        
+                        # published_at 파싱
+                        published_at = None
+                        if post_data.get('time'):
+                            try:
+                                # '2018-11-16 21:28:46' 형식 파싱
+                                published_at = datetime.strptime(
+                                    post_data['time'],
+                                    '%Y-%m-%d %H:%M:%S'
+                                )
+                                published_at = timezone.make_aware(published_at)
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # 조회수 파싱
+                        view_num = 0
+                        if post_data.get('view_num'):
+                            try:
+                                view_num = int(post_data['view_num'].replace(',', ''))
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # 댓글 수 파싱
+                        comment_num = 0
+                        if post_data.get('comment_num'):
+                            try:
+                                comment_num = int(post_data['comment_num'].replace(',', ''))
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # 추천/비추천 파싱
+                        up = 0
+                        down = 0
+                        if post_data.get('up'):
+                            try:
+                                up = int(post_data['up'].replace(',', ''))
+                            except (ValueError, TypeError):
+                                pass
+                        if post_data.get('down'):
+                            try:
+                                down = int(post_data['down'].replace(',', ''))
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # 게시글 저장
+                        SocialMediaPost.objects.create(
+                            source=source,
+                            platform_post_id=str(post_num),
+                            url=post_url,
+                            title=post_data.get('title', ''),
+                            content=post_data.get('content', ''),
+                            author=post_data.get('writer', ''),
+                            published_at=published_at,
+                            views_count=view_num,
+                            comments_count=comment_num,
+                            likes_count=up,  # 추천 수를 likes_count에 저장
+                            shares_count=down,  # 비추천 수를 shares_count에 임시 저장
+                            gall_name=gall_name,
+                            post_num=str(post_num),
+                            ip=post_data.get('ip', ''),
+                            images=post_data.get('images', []),
+                            raw_data=post_data
+                        )
+                        
+                        items_collected += 1
+                        
+                    except Exception as e:
+                        self.logger.error(
+                            f"게시글 수집 오류 (갤러리: {gall_name}, 글번호: {post_num}): {str(e)}",
+                            exc_info=True
+                        )
+                        items_error += 1
+                        continue
+            
+            # 마지막 수집 시간 업데이트
+            source.last_collected_at = timezone.now()
+            source.save()
+            
+            self.logger.info(
+                f"DC Inside 수집 완료: {source.display_name} "
+                f"(수집: {items_collected}, 건너뜀: {items_skipped}, 오류: {items_error})"
+            )
+            
+            return {
+                'status': 'success',
+                'source': str(source),
+                'items_collected': items_collected,
+                'items_skipped': items_skipped,
+                'items_error': items_error
+            }
+            
+        except Exception as e:
+            error_msg = f"DC Inside 수집 중 오류 발생: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            return {
+                'status': 'error',
+                'source': str(source),
+                'error_message': error_msg,
+                'items_collected': items_collected,
+                'items_skipped': items_skipped,
+                'items_error': items_error
+            }
+
+
+class RedditRSSCollectorService:
+    """
+    Reddit RSS 피드 수집 서비스 클래스
+    
+    Reddit RSS 피드를 파싱하여 게시글을 수집하여 데이터베이스에 저장하는 서비스입니다.
+    feedparser를 사용하여 RSS 피드를 파싱합니다.
+    
+    주요 기능:
+    1. Reddit RSS 피드 파싱
+    2. 중복 수집 방지 (URL 기반)
+    3. 수집 작업 로그 기록
+    
+    사용 예시:
+        collector = RedditRSSCollectorService()
+        result = collector.collect_from_source(source_id=1)
+    """
+    
+    def __init__(self):
+        """Reddit RSS 수집 서비스 초기화"""
+        self.logger = logging.getLogger(__name__)
+    
+    def collect_from_source(
+        self,
+        source: Optional[SocialMediaSource] = None,
+        source_id: Optional[int] = None
+    ) -> Dict:
+        """
+        Reddit RSS 소스에서 게시글을 수집합니다.
+        
+        Args:
+            source: SocialMediaSource 객체 (선택)
+            source_id: SocialMediaSource ID (선택)
+            
+        Returns:
+            수집 결과 딕셔너리:
+            {
+                'status': 'success' | 'error',
+                'source': 소스 이름,
+                'items_collected': 수집된 게시글 수,
+                'items_skipped': 건너뛴 게시글 수,
+                'items_error': 오류 발생 게시글 수,
+                'error_message': 에러 메시지 (있는 경우)
+            }
+        """
+        # 소스 가져오기
+        if source_id:
+            try:
+                source = SocialMediaSource.objects.get(id=source_id, platform='reddit')
+            except SocialMediaSource.DoesNotExist:
+                error_msg = f"Reddit 소스를 찾을 수 없습니다 (ID: {source_id})"
+                self.logger.error(error_msg)
+                return {
+                    'status': 'error',
+                    'error_message': error_msg,
+                    'items_collected': 0,
+                    'items_skipped': 0,
+                    'items_error': 0
+                }
+        
+        if not source:
+            error_msg = "소스가 제공되지 않았습니다."
+            self.logger.error(error_msg)
+            return {
+                'status': 'error',
+                'error_message': error_msg,
+                'items_collected': 0,
+                'items_skipped': 0,
+                'items_error': 0
+            }
+        
+        if source.platform != 'reddit':
+            error_msg = f"Reddit 소스가 아닙니다 (플랫폼: {source.platform})"
+            self.logger.error(error_msg)
+            return {
+                'status': 'error',
+                'error_message': error_msg,
+                'items_collected': 0,
+                'items_skipped': 0,
+                'items_error': 0
+            }
+        
+        # RSS URL 가져오기
+        rss_url = source.url
+        if not rss_url:
+            error_msg = "RSS URL이 설정되지 않았습니다."
+            self.logger.error(error_msg)
+            return {
+                'status': 'error',
+                'error_message': error_msg,
+                'items_collected': 0,
+                'items_skipped': 0,
+                'items_error': 0
+            }
+        
+        # 서브레딧 이름 (identifier에서 가져오기)
+        subreddit = source.identifier
+        
+        self.logger.info(f"Reddit RSS 수집 시작: {source.display_name} (URL: {rss_url})")
+        
+        items_collected = 0
+        items_skipped = 0
+        items_error = 0
+        
+        try:
+            # RSS 피드 파싱
+            feed = feedparser.parse(rss_url)
+            
+            if feed.bozo and feed.bozo_exception:
+                error_msg = f"RSS 피드 파싱 오류: {str(feed.bozo_exception)}"
+                self.logger.error(error_msg)
+                return {
+                    'status': 'error',
+                    'source': str(source),
+                    'error_message': error_msg,
+                    'items_collected': 0,
+                    'items_skipped': 0,
+                    'items_error': 0
+                }
+            
+            if not feed.entries:
+                self.logger.warning(f"RSS 피드에 항목이 없습니다: {rss_url}")
+                return {
+                    'status': 'success',
+                    'source': str(source),
+                    'items_collected': 0,
+                    'items_skipped': 0,
+                    'items_error': 0
+                }
+            
+            # 각 게시글 처리
+            for entry in feed.entries:
+                try:
+                    # URL 추출
+                    post_url = entry.get('link', '')
+                    if not post_url:
+                        items_error += 1
+                        continue
+                    
+                    # 중복 체크 (URL 기반)
+                    if SocialMediaPost.objects.filter(url=post_url).exists():
+                        items_skipped += 1
+                        continue
+                    
+                    # 게시글 ID 추출 (예: t3_1pirwx8)
+                    post_id = entry.get('id', '')
+                    if not post_id:
+                        # URL에서 추출 시도
+                        # 예: https://www.reddit.com/r/technology/comments/1pirwx8/...
+                        import re
+                        match = re.search(r'/comments/([^/]+)/', post_url)
+                        if match:
+                            post_id = f"t3_{match.group(1)}"
+                    
+                    # 제목 추출
+                    title = entry.get('title', '').strip()
+                    if not title:
+                        items_error += 1
+                        continue
+                    
+                    # 작성자 추출 (예: /u/cosmicreggae)
+                    author = entry.get('author', '').strip()
+                    if author.startswith('/u/'):
+                        author = author[3:]  # /u/ 제거
+                    
+                    # 발행 시간 파싱
+                    published_at = None
+                    if entry.get('published'):
+                        try:
+                            # feedparser가 자동으로 파싱한 datetime 객체 사용
+                            published_at = entry.get('published_parsed')
+                            if published_at:
+                                from time import struct_time
+                                if isinstance(published_at, struct_time):
+                                    published_at = datetime(*published_at[:6])
+                                    published_at = timezone.make_aware(published_at)
+                        except (ValueError, TypeError, AttributeError):
+                            pass
+                    
+                    # 내용 추출 (HTML 형식)
+                    content = entry.get('summary', '') or entry.get('description', '')
+                    
+                    # 썸네일 이미지 추출
+                    thumbnail_url = None
+                    if hasattr(entry, 'media_thumbnail'):
+                        if entry.media_thumbnail:
+                            thumbnail_url = entry.media_thumbnail[0].get('url', '')
+                    elif hasattr(entry, 'media_content'):
+                        if entry.media_content:
+                            thumbnail_url = entry.media_content[0].get('url', '')
+                    
+                    # 카테고리에서 서브레딧 이름 추출
+                    entry_subreddit = subreddit
+                    if hasattr(entry, 'tags') and entry.tags:
+                        for tag in entry.tags:
+                            if tag.get('term'):
+                                entry_subreddit = tag.get('term')
+                                break
+                    
+                    # 게시글 저장
+                    SocialMediaPost.objects.create(
+                        source=source,
+                        platform_post_id=post_id,
+                        url=post_url,
+                        title=title,
+                        content=content,
+                        author=author,
+                        published_at=published_at,
+                        subreddit=entry_subreddit,
+                        thumbnail_url=thumbnail_url,
+                        raw_data={
+                            'id': post_id,
+                            'link': post_url,
+                            'title': title,
+                            'author': entry.get('author', ''),
+                            'published': entry.get('published', ''),
+                            'updated': entry.get('updated', ''),
+                            'summary': content,
+                        }
+                    )
+                    
+                    items_collected += 1
+                    
+                except Exception as e:
+                    self.logger.error(
+                        f"게시글 수집 오류 (URL: {entry.get('link', 'unknown')}): {str(e)}",
+                        exc_info=True
+                    )
+                    items_error += 1
+                    continue
+            
+            # 마지막 수집 시간 업데이트
+            source.last_collected_at = timezone.now()
+            source.save()
+            
+            self.logger.info(
+                f"Reddit RSS 수집 완료: {source.display_name} "
+                f"(수집: {items_collected}, 건너뜀: {items_skipped}, 오류: {items_error})"
+            )
+            
+            return {
+                'status': 'success',
+                'source': str(source),
+                'items_collected': items_collected,
+                'items_skipped': items_skipped,
+                'items_error': items_error
+            }
+            
+        except Exception as e:
+            error_msg = f"Reddit RSS 수집 중 오류 발생: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            return {
+                'status': 'error',
+                'source': str(source),
+                'error_message': error_msg,
+                'items_collected': items_collected,
+                'items_skipped': items_skipped,
+                'items_error': items_error
+            }
 

@@ -202,3 +202,6 @@ wrapt==1.17.3
 wsproto==1.2.0
 yarl==1.22.0
 zipp==3.23.0
+
+# DC Inside API
+git+https://github.com/Limsunoh/dcinside-read-api.git
