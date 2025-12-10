@@ -16,7 +16,7 @@ Serializer의 역할:
 """
 from typing import Dict, Any
 from rest_framework import serializers
-from .models import NewsSource, NewsArticle, SocialMediaPost, DataCollectionJob
+from .models import NewsSource, NewsArticle, SocialMediaSource, SocialMediaPost, DataCollectionJob
 
 
 class NewsSourceSerializer(serializers.ModelSerializer):
@@ -504,16 +504,454 @@ class DataCollectionJobSerializer(serializers.ModelSerializer):
             return "-"
 
 
-class SocialMediaPostSerializer(serializers.ModelSerializer):
+class SocialMediaSourceSerializer(serializers.ModelSerializer):
     """
-    소셜 미디어 게시물 Serializer (TODO)
+    소셜 미디어 소스 Serializer
     
-    SocialMediaPost 모델은 아직 구현되지 않았으므로
-    기본 Serializer만 정의합니다.
+    SocialMediaSource 모델을 JSON으로 변환하거나, JSON으로부터 SocialMediaSource 객체를 생성합니다.
     
-    모델이 구현되면 NewsArticleSerializer와 유사한 구조로 확장할 수 있습니다.
+    주요 기능:
+    - 소셜 미디어 소스 정보 직렬화/역직렬화
+    - 수집된 게시물 개수 표시 (읽기 전용)
+    - 플랫폼별 검증
     """
+    
+    # 읽기 전용 필드: 수집된 게시물 개수
+    post_count = serializers.IntegerField(
+        read_only=True,
+        help_text='이 소스에서 수집된 게시물 개수'
+    )
+    
+    # 읽기 전용 필드: 마지막 수집 시간 (형식화)
+    last_collected_at_display = serializers.DateTimeField(
+        read_only=True,
+        source='last_collected_at',
+        format='%Y-%m-%d %H:%M:%S',
+        help_text='마지막 수집 시간 (형식화된 문자열)'
+    )
+    
+    # 플랫폼 표시 이름
+    platform_display = serializers.CharField(
+        source='get_platform_display',
+        read_only=True,
+        help_text='플랫폼 표시 이름 (예: "Reddit", "DC Inside")'
+    )
+    
+    class Meta:
+        model = SocialMediaSource
+        fields = '__all__'
+        
+        read_only_fields = [
+            'id',
+            'created_at',
+            'updated_at',
+            'last_collected_at',
+        ]
+        
+        extra_kwargs = {
+            'platform': {
+                'help_text': '소셜 미디어 플랫폼 타입 (reddit, dcinside)',
+                'required': True,
+            },
+            'identifier': {
+                'help_text': '플랫폼별 식별자 (Reddit: subreddit 이름, DC Inside: 갤러리 이름)',
+                'required': True,
+            },
+            'display_name': {
+                'help_text': '소스의 표시용 이름 (예: r/technology, dcbest 갤러리)',
+                'required': True,
+            },
+            'url': {
+                'help_text': 'RSS 피드 URL 또는 API 엔드포인트 주소',
+                'required': True,
+            },
+            'source_type': {
+                'help_text': '데이터 수집 방식 (rss, api, scraping)',
+                'required': False,
+            },
+            'category': {
+                'help_text': '소스의 카테고리 또는 태그',
+                # 모델에 blank=True, null=True가 있으면 자동 적용
+            },
+            'is_active': {
+                'help_text': '이 소스에서 데이터를 수집할지 여부',
+                # 모델에 default=True가 있으면 자동 적용
+            },
+            'collection_interval': {
+                'help_text': '데이터 수집 주기 (분 단위)',
+                'min_value': 1,  # 검증용 (모델에는 없음)
+                'max_value': 1440,  # 검증용 (모델에는 없음)
+            },
+            'api_credentials': {
+                'help_text': 'API 인증에 필요한 정보 (JSON 형태)',
+                # 모델에 blank=True, null=True가 있으면 자동 적용
+            },
+        }
+    
+    def validate(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        전체 데이터 검증 메서드
+        """
+        # identifier 필드 검증
+        if 'identifier' in data:
+            identifier = data.get('identifier', '')
+            if isinstance(identifier, str):
+                identifier = identifier.strip()
+            
+            if not identifier:
+                raise serializers.ValidationError({
+                    'identifier': '식별자는 필수입니다.'
+                })
+            
+            data['identifier'] = identifier
+        
+        # display_name 필드 검증
+        if 'display_name' in data:
+            display_name = data.get('display_name', '')
+            if isinstance(display_name, str):
+                display_name = display_name.strip()
+            
+            if not display_name:
+                raise serializers.ValidationError({
+                    'display_name': '표시 이름은 필수입니다.'
+                })
+            
+            data['display_name'] = display_name
+        else:
+            # display_name이 제공되지 않은 경우
+            raise serializers.ValidationError({
+                'display_name': '표시 이름은 필수입니다.'
+            })
+        
+        # url 필드 검증
+        if 'url' in data:
+            url = data.get('url', '')
+            if isinstance(url, str):
+                url = url.strip()
+            
+            if not url:
+                raise serializers.ValidationError({
+                    'url': 'URL은 필수입니다.'
+                })
+            
+            if not (url.startswith('http://') or url.startswith('https://')):
+                raise serializers.ValidationError({
+                    'url': 'URL은 http:// 또는 https://로 시작해야 합니다.'
+                })
+            
+            data['url'] = url
+        
+        # platform별 identifier 검증
+        if 'platform' in data and 'identifier' in data:
+            platform = data.get('platform')
+            identifier = data.get('identifier', '')
+            
+            if platform == 'reddit':
+                # Reddit: subreddit 이름은 소문자, 숫자, 언더스코어만 허용
+                if not identifier.replace('_', '').replace('-', '').isalnum():
+                    raise serializers.ValidationError({
+                        'identifier': 'Reddit subreddit 이름은 영문자, 숫자, 언더스코어, 하이픈만 허용됩니다.'
+                    })
+            elif platform == 'dcinside':
+                # DC Inside: 갤러리 이름은 영문자, 숫자, 언더스코어, 하이픈만 허용
+                if not identifier.replace('_', '').replace('-', '').isalnum():
+                    raise serializers.ValidationError({
+                        'identifier': 'DC Inside 갤러리 이름은 영문자, 숫자, 언더스코어, 하이픈만 허용됩니다.'
+                    })
+        
+        return data
+    
+    def to_representation(self, instance):
+        """
+        직렬화 시 추가 데이터를 포함하는 메서드
+        """
+        representation = super().to_representation(instance)
+        
+        # 수집된 게시물 개수 추가
+        representation['post_count'] = instance.posts.count()
+        
+        return representation
+
+
+class BaseSocialMediaPostSerializer(serializers.ModelSerializer):
+    """
+    소셜 미디어 게시물 기본 Serializer
+    
+    공통 필드와 메서드를 정의합니다.
+    플랫폼별 시리얼라이저는 이 클래스를 상속받아 사용합니다.
+    """
+    
+    # 중첩된 소스 정보
+    source_detail = SocialMediaSourceSerializer(
+        source='source',
+        read_only=True,
+        help_text='소셜 미디어 소스 상세 정보'
+    )
+    
+    # 소스 이름
+    source_name = serializers.SerializerMethodField(
+        read_only=True,
+        help_text='소셜 미디어 소스 이름'
+    )
+    
+    # 플랫폼 정보
+    platform = serializers.SerializerMethodField(
+        read_only=True,
+        help_text='플랫폼 타입 (소스에서 가져옴)'
+    )
+    
+    # 제목 요약
+    title_short = serializers.SerializerMethodField(
+        help_text='제목 요약 (50자로 제한)',
+    )
+    
+    # 게시 시간 형식화
+    published_at_display = serializers.DateTimeField(
+        read_only=True,
+        source='published_at',
+        format='%Y-%m-%d %H:%M:%S',
+        help_text='게시 시간 (형식화된 문자열)'
+    )
+    
+    # 수집 시간 형식화
+    collected_at_display = serializers.DateTimeField(
+        read_only=True,
+        source='collected_at',
+        format='%Y-%m-%d %H:%M:%S',
+        help_text='수집 시간 (형식화된 문자열)'
+    )
     
     class Meta:
         model = SocialMediaPost
         fields = '__all__'
+        
+        read_only_fields = [
+            'id',
+            'collected_at',
+            'url',  # URL은 수집 시 자동 설정
+        ]
+    
+    def get_source_name(self, obj):
+        """소스 이름 반환"""
+        return str(obj.source) if obj.source else 'Unknown'
+    
+    def get_platform(self, obj):
+        """플랫폼 타입 반환"""
+        return obj.platform if obj.source else None
+    
+    def get_title_short(self, obj):
+        """제목을 50자로 제한하여 반환"""
+        if obj.title and len(obj.title) > 50:
+            return obj.title[:50] + '...'
+        return obj.title or ''
+
+
+class RedditPostSerializer(BaseSocialMediaPostSerializer):
+    """
+    Reddit 게시물 Serializer
+    
+    Reddit 플랫폼에 특화된 필드와 검증을 포함합니다.
+    """
+    
+    class Meta(BaseSocialMediaPostSerializer.Meta):
+        fields = [
+            'id', 'source', 'source_detail', 'source_name', 'platform',
+            'platform_post_id', 'url', 'title', 'title_short', 'content',
+            'author', 'published_at', 'published_at_display',
+            'collected_at', 'collected_at_display',
+            'likes_count', 'comments_count', 'shares_count', 'views_count',
+            'subreddit', 'upvotes', 'downvotes', 'score',
+            'thumbnail_url',
+            'raw_data', 'is_processed'
+        ]
+        
+        extra_kwargs = {
+            'source': {
+                'help_text': '소셜 미디어 소스 ID',
+                'required': True,
+            },
+            'title': {
+                'help_text': '게시물의 제목 (필수)',
+                'required': True,
+            },
+            'content': {
+                'help_text': '게시물의 본문 내용 (필수)',
+                'required': True,
+            },
+            'subreddit': {
+                'help_text': 'Reddit 서브레딧 이름',
+            },
+            'upvotes': {
+                'help_text': 'Reddit 업보트 수',
+            },
+            'downvotes': {
+                'help_text': 'Reddit 다운보트 수',
+            },
+            'score': {
+                'help_text': 'Reddit 스코어 (업보트 - 다운보트)',
+            },
+        }
+    
+    def validate(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Reddit 게시물 검증"""
+        # source 필드 검증
+        source = data.get('source')
+        if not source:
+            if not self.instance:
+                raise serializers.ValidationError({
+                    'source': '소스는 필수입니다.'
+                })
+            source = self.instance.source if self.instance else None
+        
+        # Reddit 플랫폼 검증
+        if source:
+            if isinstance(source, int):
+                from data_collector.models import SocialMediaSource
+                try:
+                    source_obj = SocialMediaSource.objects.get(id=source)
+                except SocialMediaSource.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'source': '존재하지 않는 소스입니다.'
+                    })
+            else:
+                source_obj = source
+            
+            if source_obj.platform != 'reddit':
+                raise serializers.ValidationError({
+                    'source': 'Reddit 소스만 사용할 수 있습니다.'
+                })
+            
+            # title 필수
+            title = data.get('title')
+            if not title:
+                if not (self.instance and self.instance.title):
+                    raise serializers.ValidationError({
+                        'title': 'Reddit 게시물은 제목(title)이 필수입니다.'
+                    })
+            
+            # content 필수
+            content = data.get('content')
+            if not content:
+                if not (self.instance and self.instance.content):
+                    raise serializers.ValidationError({
+                        'content': 'Reddit 게시물은 내용(content)이 필수입니다.'
+                    })
+        
+        # url 필드 검증
+        if 'url' in data:
+            url = data.get('url', '')
+            if url:
+                if isinstance(url, str):
+                    url = url.strip()
+                if not (url.startswith('http://') or url.startswith('https://')):
+                    raise serializers.ValidationError({
+                        'url': 'URL은 http:// 또는 https://로 시작해야 합니다.'
+                    })
+                data['url'] = url
+        
+        return data
+
+
+class DCInsidePostSerializer(BaseSocialMediaPostSerializer):
+    """
+    DC Inside 게시물 Serializer
+    
+    DC Inside 플랫폼에 특화된 필드와 검증을 포함합니다.
+    """
+    
+    class Meta(BaseSocialMediaPostSerializer.Meta):
+        fields = [
+            'id', 'source', 'source_detail', 'source_name', 'platform',
+            'platform_post_id', 'url', 'title', 'title_short', 'content',
+            'author', 'published_at', 'published_at_display',
+            'collected_at', 'collected_at_display',
+            'likes_count', 'comments_count', 'shares_count', 'views_count',
+            'gall_name', 'post_num', 'ip', 'images',
+            'raw_data', 'is_processed'
+        ]
+        
+        extra_kwargs = {
+            'source': {
+                'help_text': '소셜 미디어 소스 ID',
+                'required': True,
+            },
+            'title': {
+                'help_text': '게시물의 제목 (필수)',
+                'required': True,
+            },
+            'content': {
+                'help_text': '게시물의 본문 내용 (필수)',
+                'required': True,
+            },
+            'gall_name': {
+                'help_text': 'DC Inside 갤러리 이름 (예: dcbest, programming)',
+            },
+            'post_num': {
+                'help_text': 'DC Inside 게시글 번호',
+            },
+            'ip': {
+                'help_text': '작성자 IP 주소 (일부만 표시)',
+            },
+            'images': {
+                'help_text': '게시글에 포함된 이미지 URL 목록 (JSON 배열)',
+            },
+        }
+    
+    def validate(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """DC Inside 게시물 검증"""
+        # source 필드 검증
+        source = data.get('source')
+        if not source:
+            if not self.instance:
+                raise serializers.ValidationError({
+                    'source': '소스는 필수입니다.'
+                })
+            source = self.instance.source if self.instance else None
+        
+        # DC Inside 플랫폼 검증
+        if source:
+            if isinstance(source, int):
+                from data_collector.models import SocialMediaSource
+                try:
+                    source_obj = SocialMediaSource.objects.get(id=source)
+                except SocialMediaSource.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'source': '존재하지 않는 소스입니다.'
+                    })
+            else:
+                source_obj = source
+            
+            if source_obj.platform != 'dcinside':
+                raise serializers.ValidationError({
+                    'source': 'DC Inside 소스만 사용할 수 있습니다.'
+                })
+            
+            # title 필수
+            title = data.get('title')
+            if not title:
+                if not (self.instance and self.instance.title):
+                    raise serializers.ValidationError({
+                        'title': 'DC Inside 게시물은 제목(title)이 필수입니다.'
+                    })
+            
+            # content 필수
+            content = data.get('content')
+            if not content:
+                if not (self.instance and self.instance.content):
+                    raise serializers.ValidationError({
+                        'content': 'DC Inside 게시물은 내용(content)이 필수입니다.'
+                    })
+        
+        # url 필드 검증
+        if 'url' in data:
+            url = data.get('url', '')
+            if url:
+                if isinstance(url, str):
+                    url = url.strip()
+                if not (url.startswith('http://') or url.startswith('https://')):
+                    raise serializers.ValidationError({
+                        'url': 'URL은 http:// 또는 https://로 시작해야 합니다.'
+                    })
+                data['url'] = url
+        
+        return data

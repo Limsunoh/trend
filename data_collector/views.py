@@ -11,7 +11,9 @@ from .models import NewsSource, NewsArticle, SocialMediaPost, DataCollectionJob
 from .serializers import (
     NewsSourceSerializer,
     NewsArticleSerializer,
-    SocialMediaPostSerializer,
+    BaseSocialMediaPostSerializer,
+    RedditPostSerializer,
+    DCInsidePostSerializer,
     DataCollectionJobSerializer
 )
 from .tasks import collect_rss_news_task, collect_all_rss_news_task
@@ -213,9 +215,53 @@ class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
-    """소셜 미디어 게시물 ViewSet (읽기 전용, TODO)"""
+    """소셜 미디어 게시물 ViewSet (읽기 전용)"""
     queryset = SocialMediaPost.objects.all()
-    serializer_class = SocialMediaPostSerializer
+    serializer_class = BaseSocialMediaPostSerializer  # 기본값
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['title', 'content', 'author']
+    ordering_fields = ['published_at', 'collected_at', 'title']
+    ordering = ['-published_at', '-collected_at']
+    
+    def get_queryset(self):
+        """쿼리셋 필터링"""
+        queryset = SocialMediaPost.objects.all()
+        queryset = filter_queryset_by_params(
+            queryset, self.request,
+            {
+                'source': 'int',
+                'is_processed': 'bool',
+            }
+        )
+        # 플랫폼별 필터링
+        platform = self.request.query_params.get('platform')
+        if platform:
+            queryset = queryset.filter(source__platform=platform)
+        
+        return queryset.select_related('source')
+    
+    def get_serializer_class(self):
+        """플랫폼별로 적절한 시리얼라이저 선택"""
+        # 쿼리 파라미터에서 플랫폼 확인
+        platform = self.request.query_params.get('platform')
+        
+        # 객체가 있는 경우 (detail view)
+        if hasattr(self, 'get_object'):
+            try:
+                obj = self.get_object()
+                if obj and obj.source:
+                    platform = obj.source.platform
+            except:
+                pass
+        
+        # 플랫폼별 시리얼라이저 선택
+        if platform == 'reddit':
+            return RedditPostSerializer
+        elif platform == 'dcinside':
+            return DCInsidePostSerializer
+        else:
+            # 기본 시리얼라이저 (플랫폼이 명시되지 않은 경우)
+            return BaseSocialMediaPostSerializer
 
 
 class DataCollectionJobViewSet(viewsets.ReadOnlyModelViewSet):

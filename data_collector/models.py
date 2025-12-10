@@ -192,10 +192,369 @@ class NewsArticle(models.Model):
         return f"{self.title[:50]}... ({str(self.source)})"
 
 
+class SocialMediaSource(models.Model):
+    """
+    소셜 미디어 소스 정보 모델
+    
+    Reddit, Instagram 등 소셜 미디어 플랫폼에서 데이터를 수집하는 소스의 정보를 저장합니다.
+    NewsSource와 유사한 구조이지만 소셜 미디어 플랫폼에 특화된 필드를 가집니다.
+    """
+    # 플랫폼 타입
+    PLATFORM_CHOICES = [
+        ('reddit', 'Reddit'),
+        ('dcinside', 'DC Inside'),
+
+    ]
+    
+    platform = models.CharField(
+        max_length=20,
+        choices=PLATFORM_CHOICES,
+        verbose_name='플랫폼',
+        help_text='소셜 미디어 플랫폼 타입',
+        db_index=True
+    )
+    
+    # 플랫폼별 식별자
+    # Reddit: subreddit 이름 (예: 'technology', 'korea')
+    # Instagram: 사용자명 또는 해시태그 (예: 'username' 또는 '#hashtag')
+    identifier = models.CharField(
+        max_length=200,
+        verbose_name='식별자',
+        help_text='플랫폼별 식별자 (Reddit: subreddit 이름, dcinside: 갤러리이름)',
+        db_index=True
+    )
+    
+    # 표시 이름
+    display_name = models.CharField(
+        max_length=200,
+        verbose_name='표시 이름',
+        help_text='소스의 표시용 이름 (예: r/technology, 실시간 베스트 갤러리)'
+    )
+    
+    # 수집 URL (RSS 또는 API 엔드포인트)
+    url = models.URLField(
+        max_length=500,
+        verbose_name='URL',
+        help_text='RSS 피드 URL 또는 API 엔드포인트 주소'
+    )
+    
+    # 소스 타입
+    source_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('rss', 'RSS'),
+            ('api', 'API'),
+            ('scraping', '웹 스크래핑'),
+        ],
+        default='rss',
+        verbose_name='소스 타입',
+        help_text='데이터 수집 방식'
+    )
+    
+    # 카테고리/태그 
+    category = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name='카테고리',
+        help_text='소스의 카테고리 또는 태그',
+        db_index=True
+    )
+    
+    # 활성화 여부
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name='활성화',
+        help_text='이 소스에서 데이터를 수집할지 여부'
+    )
+    
+    # 수집 주기 (분 단위)
+    collection_interval = models.IntegerField(
+        default=60,
+        verbose_name='수집 주기(분)',
+        help_text='데이터를 수집하는 주기 (분 단위)'
+    )
+    
+    # 마지막 수집 시간
+    last_collected_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='마지막 수집 시간',
+        help_text='이 소스에서 마지막으로 데이터를 수집한 시간'
+    )
+    
+    # API 인증 정보 (JSON 형태로 저장)
+    api_credentials = models.JSONField(
+        null=True,
+        blank=True,
+        verbose_name='API 인증 정보',
+        help_text='API 인증에 필요한 정보 (JSON 형태)'
+    )
+    
+    # 생성 시간
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='생성 시간'
+    )
+    
+    # 수정 시간
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name='수정 시간'
+    )
+    
+    class Meta:
+        verbose_name = '소셜 미디어 소스'
+        verbose_name_plural = '소셜 미디어 소스'
+        ordering = ['platform', 'identifier', '-created_at']
+        # 같은 플랫폼의 같은 식별자는 하나만
+        unique_together = [['platform', 'identifier', 'url']]
+        indexes = [
+            models.Index(fields=['platform', 'is_active']),
+            models.Index(fields=['-last_collected_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_platform_display()} - {self.display_name}"
+
+
 class SocialMediaPost(models.Model):
-    """소셜 미디어 게시물"""
-    # TODO: 필드 정의
-    pass
+    """
+    소셜 미디어 게시물 모델
+    
+    Reddit, Instagram 등에서 수집한 게시물의 정보를 저장합니다.
+    플랫폼별로 공통 필드와 플랫폼 특화 필드를 가집니다.
+    """
+    # 소셜 미디어 소스 (외래키)
+    source = models.ForeignKey(
+        SocialMediaSource,
+        on_delete=models.CASCADE,
+        related_name='posts',
+        null=True,
+        blank=True,
+        verbose_name='소셜 미디어 소스',
+        help_text='이 게시물을 수집한 소셜 미디어 소스'
+    )
+    
+    # 플랫폼별 고유 ID (게시물의 원본 ID)
+    platform_post_id = models.CharField(
+        max_length=300,
+        blank=True,
+        null=True,
+        verbose_name='플랫폼 게시물 ID',
+        help_text='플랫폼에서 제공하는 게시물의 고유 ID',
+        db_index=True
+    )
+    
+    # 게시물 URL (고유 식별자로 사용)
+    url = models.URLField(
+        max_length=1000,
+        blank=True,
+        null=True,
+        unique=True,
+        verbose_name='URL',
+        help_text='게시물의 원본 URL (중복 방지용)',
+        db_index=True
+    )
+    
+    # 제목
+    title = models.CharField(
+        max_length=500,
+        blank=True,
+        null=True,
+        verbose_name='제목',
+        help_text='게시물의 제목'
+    )
+    
+    # 본문 내용
+    content = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name='내용',
+        help_text='게시물의 본문 내용'
+    )
+    
+    # 작성자/사용자명
+    author = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        verbose_name='작성자',
+        help_text='게시물을 작성한 사용자명',
+        db_index=True
+    )
+    
+    # 발행/게시 시간
+    published_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='게시 시간',
+        help_text='게시물이 게시된 시간',
+        db_index=True
+    )
+    
+    # 수집 시간
+    collected_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='수집 시간',
+        help_text='이 게시물을 수집한 시간',
+        db_index=True
+    )
+    
+    # ===== 공통 메트릭 필드 =====
+    # 좋아요/업보트 수
+    likes_count = models.IntegerField(
+        default=0,
+        verbose_name='좋아요 수',
+        help_text='좋아요, 업보트 등의 수 (플랫폼별로 의미가 다름)'
+    )
+    
+    # 댓글 수
+    comments_count = models.IntegerField(
+        default=0,
+        verbose_name='댓글 수',
+        help_text='댓글 개수'
+    )
+    
+    # 공유/리트윗 수
+    shares_count = models.IntegerField(
+        default=0,
+        verbose_name='공유 수',
+        help_text='공유, 리트윗 등의 수'
+    )
+    
+    # 조회수 (있는 경우)
+    views_count = models.IntegerField(
+        default=0,
+        null=True,
+        blank=True,
+        verbose_name='조회수',
+        help_text='게시물 조회수 (플랫폼별로 제공 여부가 다름)'
+    )
+    
+    # ===== Reddit 특화 필드 =====
+    # 서브레딧 이름
+    subreddit = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name='서브레딧',
+        help_text='Reddit 서브레딧 이름',
+        db_index=True
+    )
+    
+    # 업보트 수 (Reddit)
+    upvotes = models.IntegerField(
+        default=0,
+        null=True,
+        blank=True,
+        verbose_name='업보트',
+        help_text='Reddit 업보트 수'
+    )
+    
+    # 다운보트 수 (Reddit)
+    downvotes = models.IntegerField(
+        default=0,
+        null=True,
+        blank=True,
+        verbose_name='다운보트',
+        help_text='Reddit 다운보트 수'
+    )
+    
+    # 스코어 (Reddit)
+    score = models.IntegerField(
+        default=0,
+        null=True,
+        blank=True,
+        verbose_name='스코어',
+        help_text='Reddit 스코어 (업보트 - 다운보트)'
+    )
+    
+    # ===== 공통 미디어 필드 =====
+    # 썸네일 URL (Reddit RSS, DC Inside 등에서 사용)
+    thumbnail_url = models.URLField(
+        max_length=1000,
+        blank=True,
+        null=True,
+        verbose_name='썸네일 URL',
+        help_text='썸네일 이미지 URL'
+    )
+    
+    # ===== DC Inside 특화 필드 =====
+    # 갤러리 이름
+    gall_name = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name='갤러리 이름',
+        help_text='DC Inside 갤러리 이름 (예: dcbest, programming)',
+        db_index=True
+    )
+    
+    # 글 번호
+    post_num = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name='글 번호',
+        help_text='DC Inside 게시글 번호',
+        db_index=True
+    )
+    
+    # IP 주소 (일부만 표시)
+    ip = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name='IP 주소',
+        help_text='작성자 IP 주소 (일부만 표시)'
+    )
+    
+    # 이미지 URL 목록 (JSON 배열)
+    images = models.JSONField(
+        null=True,
+        blank=True,
+        verbose_name='이미지 URL 목록',
+        help_text='게시글에 포함된 이미지 URL 목록 (JSON 배열)'
+    )
+    
+    # ===== 추가 메타데이터 =====
+    # 원본 데이터 (JSON 형태로 저장, 플랫폼별 추가 정보)
+    raw_data = models.JSONField(
+        null=True,
+        blank=True,
+        verbose_name='원본 데이터',
+        help_text='플랫폼에서 받은 원본 데이터 (JSON 형태)'
+    )
+    
+    # 처리 여부 (분석 완료 여부)
+    is_processed = models.BooleanField(
+        default=False,
+        verbose_name='처리 완료',
+        help_text='이 게시물이 분석 처리되었는지 여부'
+    )
+    
+    class Meta:
+        verbose_name = '소셜 미디어 게시물'
+        verbose_name_plural = '소셜 미디어 게시물'
+        ordering = ['-published_at', '-collected_at']
+        indexes = [
+            models.Index(fields=['-published_at', '-collected_at']),
+            models.Index(fields=['source', '-published_at']),
+            models.Index(fields=['platform_post_id']),
+            models.Index(fields=['author', '-published_at']),
+            models.Index(fields=['subreddit', '-published_at']),  # Reddit용
+            models.Index(fields=['gall_name', '-published_at']),  # DC Inside용
+        ]
+    
+    def __str__(self):
+        title_preview = self.title[:50] if self.title else '제목 없음'
+        return f"{title_preview}... ({str(self.source)})"
+    
+    @property
+    def platform(self):
+        """소스의 플랫폼 반환"""
+        return self.source.platform if self.source else None
 
 
 class DataCollectionJob(models.Model):
