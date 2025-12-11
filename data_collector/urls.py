@@ -1,12 +1,14 @@
 from rest_framework.routers import DefaultRouter
 from .views import (
     NewsSourceCreateCSVViewSet,
-    ArticleCreateViewSet,
+    NewsSourceCreateViewSet,
     NewsSourceViewSet,
     NewsArticleViewSet,
     SocialMediaPostViewSet,
     DataCollectionJobViewSet,
-    TriggerCollectionViewSet
+    NewsArticleCollectionViewSet,
+    SocialMediaCollectionViewSet,
+    AllCollectionViewSet
 )
 
 router = DefaultRouter()
@@ -19,7 +21,7 @@ router.register(
 )
 router.register(
     r'sources/create-from-rss',
-    ArticleCreateViewSet,
+    NewsSourceCreateViewSet,
     basename='rss-source-create'
 )
 router.register(r'sources', NewsSourceViewSet, basename='source')
@@ -27,9 +29,19 @@ router.register(r'news', NewsArticleViewSet, basename='news')
 router.register(r'social', SocialMediaPostViewSet, basename='social')
 router.register(r'jobs', DataCollectionJobViewSet, basename='job')
 router.register(
-    r'trigger',
-    TriggerCollectionViewSet,
-    basename='trigger'
+    r'all-collection/trigger',
+    AllCollectionViewSet,
+    basename='all-collection-trigger'
+)
+router.register(
+    r'news-article-collection/trigger',
+    NewsArticleCollectionViewSet,
+    basename='news-article-collection-trigger'
+)
+router.register(
+    r'social-media-collection/trigger',
+    SocialMediaCollectionViewSet,
+    basename='social-media-collection-trigger'
 )
 
 urlpatterns = router.urls
