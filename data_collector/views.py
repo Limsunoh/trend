@@ -3,22 +3,30 @@
 """
 import logging
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import QuerySet
-from .models import NewsSource, NewsArticle, SocialMediaPost, DataCollectionJob
+from .models import (
+    NewsSource,
+    NewsArticle,
+    SocialMediaSource,
+    SocialMediaPost,
+    DataCollectionJob
+)
 from .serializers import (
     NewsSourceSerializer,
     NewsArticleSerializer,
+    SocialMediaSourceSerializer,
     BaseSocialMediaPostSerializer,
     RedditPostSerializer,
     DCInsidePostSerializer,
     DataCollectionJobSerializer
 )
-from .tasks import collect_rss_news_task, collect_all_rss_news_task
+from .tasks import (
+    collect_all_rss_news_task,
+    collect_all_social_media_task
+)
 from .services import RSSCollectorService, NewsSourceCSVService
-from celery.result import AsyncResult
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +106,7 @@ class NewsSourceCreateCSVViewSet(viewsets.ViewSet):
         }, status=status.HTTP_201_CREATED)
 
 
-class ArticleCreateViewSet(viewsets.ViewSet):
+class NewsSourceCreateViewSet(viewsets.ViewSet):
     """RSS URL로부터 NewsSource 자동 생성 ViewSet"""
 
     def create(self, request):
@@ -140,8 +148,8 @@ class ArticleCreateViewSet(viewsets.ViewSet):
         }, status=status_code)
 
 
-class NewsSourceViewSet(viewsets.ModelViewSet):
-    """뉴스 소스 ViewSet"""
+class NewsSourceViewSet(viewsets.ReadOnlyModelViewSet):
+    """뉴스 소스 ViewSet (읽기 전용)"""
     queryset = NewsSource.objects.all()
     serializer_class = NewsSourceSerializer
     filter_backends = [SearchFilter, OrderingFilter]
@@ -157,37 +165,6 @@ class NewsSourceViewSet(viewsets.ModelViewSet):
             queryset, self.request,
             {'is_active': 'bool', 'source_type': 'str'}
         )
-
-    @action(detail=True, methods=['post'])
-    def collect(self, request, pk=None):
-        """특정 소스에서 데이터 수집 시작"""
-        source = NewsSource.objects.get(pk=pk)
-        try:
-            # Celery 태스크는 비동기 실행을 위해 delay() 사용
-            task_result: AsyncResult = collect_rss_news_task.delay(
-                source_id=source.id
-            )
-            logger.info(
-                f"소스 수집 태스크 시작: {str(source)} "
-                f"(ID: {source.id}, Task ID: {task_result.id})"
-            )
-            return Response({
-                'status': 'started',
-                'task_id': task_result.id,
-                'message': f'{str(source)}에서 수집 작업이 시작되었습니다.',
-                'source': str(source),
-                'source_id': source.id
-            }, status=status.HTTP_202_ACCEPTED)
-        except Exception as e:
-            logger.error(
-                f"소스 수집 태스크 시작 실패: {str(source)} - {str(e)}",
-                exc_info=True
-            )
-            return Response({
-                'status': 'error',
-                'message': f'수집 작업 시작 실패: {str(e)}',
-                'source': str(source)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
@@ -251,7 +228,7 @@ class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
                 obj = self.get_object()
                 if obj and obj.source:
                     platform = obj.source.platform
-            except:
+            except Exception:
                 pass
         
         # 플랫폼별 시리얼라이저 선택
@@ -281,8 +258,8 @@ class DataCollectionJobViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.select_related('source')
 
 
-class TriggerCollectionViewSet(viewsets.ViewSet):
-    """데이터 수집 작업 트리거 ViewSet"""
+class NewsArticleCollectionViewSet(viewsets.ViewSet):
+    """뉴스 기사 수집 작업 트리거 ViewSet"""
 
     def list(self, request):
         """최근 수집 작업 목록 조회 (GET /api/collector/trigger/)"""
@@ -298,73 +275,186 @@ class TriggerCollectionViewSet(viewsets.ViewSet):
         })
 
     def create(self, request):
-        """데이터 수집 작업 시작 (POST /api/collector/trigger/)"""
+        """
+        모든 활성화된 뉴스 소스에서 수집 작업 시작
+        
+        이 엔드포인트는 전체 수집만 담당합니다.
+        """
         try:
-            source_id = (
-                request.data.get('source_id') or
-                request.query_params.get('source_id')
+            # 전체 뉴스 소스 수집
+            task_result = collect_all_rss_news_task.delay()
+            logger.info(
+                f"전체 뉴스 소스 수집 태스크 시작 "
+                f"(Task ID: {task_result.id})"
             )
-            source_id = int(source_id) if source_id else None
-            source_name = (
-                request.data.get('source_name') or
-                request.query_params.get('source_name')
-            )
-            source_name = source_name.strip() if source_name else None
-            collect_all = (
-                request.data.get('collect_all') or
-                request.query_params.get('collect_all')
-            )
-            collect_all = (
-                str(collect_all).lower() == 'true' if collect_all else False
-            )
-
-            # 엄격한 검증: collect_all과 source_id/source_name을 동시에 사용할 수 없음
-            if collect_all and (source_id or source_name):
-                return Response({
-                    'status': 'error',
-                    'message': (
-                        'collect_all과 source_id/source_name을 '
-                        '동시에 사용할 수 없습니다.'
-                    )
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            elif collect_all or (not source_id and not source_name):
-                # 전체 수집: collect_all이 True이거나 파라미터가 모두 없을 때
-                task_result = collect_all_rss_news_task.delay()
-                logger.info(f"전체 소스 수집 태스크 시작 (Task ID: {task_result.id})")
-                return Response({
-                    'status': 'started',
-                    'task_id': task_result.id,
-                    'message': '모든 활성화된 소스에서 수집 작업이 시작되었습니다.',
-                    'collect_all': True
-                }, status=status.HTTP_202_ACCEPTED)
-
-            # 특정 소스 수집: source_id 또는 source_name이 있을 때
-            elif source_id or source_name:
-                task_result = collect_rss_news_task.delay(
-                    source_id=source_id, source_name=source_name
-                )
-                logger.info(
-                    f"소스 수집 태스크 시작: source_id={source_id}, "
-                    f"source_name={source_name} (Task ID: {task_result.id})"
-                )
-                return Response({
-                    'status': 'started',
-                    'task_id': task_result.id,
-                    'message': '수집 작업이 시작되었습니다.',
-                    'source_id': source_id,
-                    'source_name': source_name
-                }, status=status.HTTP_202_ACCEPTED)
-
-        except ValueError as e:
-            logger.error(f"수집 작업 트리거 실패: 잘못된 파라미터 - {str(e)}")
             return Response({
-                'status': 'error',
-                'message': f'잘못된 파라미터: {str(e)}'
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'status': 'started',
+                'task_id': task_result.id,
+                'message': (
+                    '모든 활성화된 뉴스 소스에서 '
+                    '수집 작업이 시작되었습니다.'
+                )
+            }, status=status.HTTP_202_ACCEPTED)
+
         except Exception as e:
-            logger.error(f"수집 작업 트리거 실패: {str(e)}", exc_info=True)
+            logger.error(
+                f"뉴스 수집 작업 트리거 실패: {str(e)}",
+                exc_info=True
+            )
             return Response({
                 'status': 'error',
                 'message': f'수집 작업 시작 실패: {str(e)}'
-            }, status=status.HTTP_404_NOT_FOUND)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class SocialMediaSourceViewSet(viewsets.ModelViewSet):
+    """소셜 미디어 소스 ViewSet"""
+    queryset = SocialMediaSource.objects.all()
+    serializer_class = SocialMediaSourceSerializer
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['display_name', 'identifier', 'url', 'category']
+    ordering_fields = [
+        'platform', 'display_name', 'created_at', 'last_collected_at'
+    ]
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        queryset = SocialMediaSource.objects.all()
+        return filter_queryset_by_params(
+            queryset, self.request,
+            {
+                'is_active': 'bool',
+                'platform': 'str',
+                'source_type': 'str'
+            }
+        )
+
+
+class SocialMediaCollectionViewSet(viewsets.ViewSet):
+    """소셜 미디어 수집 작업 트리거 ViewSet"""
+
+    def list(self, request):
+        """최근 소셜 미디어 수집 작업 목록 조회"""
+        recent_sources = (
+            SocialMediaSource.objects
+            .filter(is_active=True)
+            .order_by('-last_collected_at')[:10]
+        )
+        return Response({
+            'message': '활성화된 소셜 미디어 소스 목록',
+            'count': len(recent_sources),
+            'sources': SocialMediaSourceSerializer(
+                recent_sources, many=True
+            ).data
+        })
+
+    def create(self, request):
+        """
+        모든 활성화된 소셜 미디어 소스에서 수집 작업 시작
+        
+        이 엔드포인트는 전체 수집만 담당합니다.
+        """
+        try:
+            # 전체 소셜 미디어 소스 수집
+            task_result = collect_all_social_media_task.delay()
+            logger.info(
+                f"전체 소셜 미디어 소스 수집 태스크 시작 "
+                f"(Task ID: {task_result.id})"
+            )
+            return Response({
+                'status': 'started',
+                'task_id': task_result.id,
+                'message': (
+                    '모든 활성화된 소셜 미디어 소스에서 '
+                    '수집 작업이 시작되었습니다.'
+                )
+            }, status=status.HTTP_202_ACCEPTED)
+
+        except Exception as e:
+            logger.error(
+                f"소셜 미디어 수집 작업 트리거 실패: {str(e)}",
+                exc_info=True
+            )
+            return Response({
+                'status': 'error',
+                'message': f'수집 작업 시작 실패: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AllCollectionViewSet(viewsets.ViewSet):
+    """News와 Social Media 전체 수집 작업 트리거 ViewSet"""
+
+    def list(self, request):
+        """최근 수집 작업 목록 조회"""
+        recent_jobs = (
+            DataCollectionJob.objects
+            .select_related('source')
+            .order_by('-started_at')[:10]
+        )
+        recent_sources = (
+            SocialMediaSource.objects
+            .filter(is_active=True)
+            .order_by('-last_collected_at')[:10]
+        )
+        return Response({
+            'message': '최근 수집 작업 및 소스 목록',
+            'news_jobs': {
+                'count': len(recent_jobs),
+                'jobs': DataCollectionJobSerializer(
+                    recent_jobs, many=True
+                ).data
+            },
+            'social_media_sources': {
+                'count': len(recent_sources),
+                'sources': SocialMediaSourceSerializer(
+                    recent_sources, many=True
+                ).data
+            }
+        })
+
+    def create(self, request):
+        """
+        모든 활성화된 News와 Social Media 소스에서 수집 작업 시작
+        
+        News와 Social Media 수집을 동시에 시작합니다.
+        """
+        try:
+            # News 전체 수집
+            news_task_result = collect_all_rss_news_task.delay()
+            
+            # Social Media 전체 수집
+            social_task_result = collect_all_social_media_task.delay()
+            
+            logger.info(
+                f"전체 수집 태스크 시작 - "
+                f"News Task ID: {news_task_result.id}, "
+                f"Social Media Task ID: {social_task_result.id}"
+            )
+            
+            return Response({
+                'status': 'started',
+                'tasks': {
+                    'news': {
+                        'task_id': news_task_result.id,
+                        'message': '뉴스 수집 작업이 시작되었습니다.'
+                    },
+                    'social_media': {
+                        'task_id': social_task_result.id,
+                        'message': '소셜 미디어 수집 작업이 시작되었습니다.'
+                    }
+                },
+                'message': (
+                    '모든 활성화된 News와 Social Media 소스에서 '
+                    '수집 작업이 시작되었습니다.'
+                )
+            }, status=status.HTTP_202_ACCEPTED)
+
+        except Exception as e:
+            logger.error(
+                f"전체 수집 작업 트리거 실패: {str(e)}",
+                exc_info=True
+            )
+            return Response({
+                'status': 'error',
+                'message': f'수집 작업 시작 실패: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

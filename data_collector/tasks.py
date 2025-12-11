@@ -13,21 +13,30 @@ import logging
 from typing import Optional
 from celery import shared_task
 from django.utils import timezone
-from .services import RSSCollectorService
-from .models import NewsSource, CollectionSession, DataCollectionJob
-from .report_service import CollectionReportService
-from common.redis_services import (
-    DuplicatePreventionService,
-    RateLimitService,
-    RealtimeStatsService
+from .services import (
+    RSSCollectorService,
+    DCInsideCollectorService,
+    RedditRSSCollectorService
 )
+from .models import (
+    NewsSource,
+    SocialMediaSource,
+    CollectionSession,
+    DataCollectionJob
+)
+from .report_service import CollectionReportService
 
 # 로거 설정
 logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True, max_retries=3)
-def collect_rss_news_task(self, source_id: Optional[int] = None, source_name: Optional[str] = None, session_id: Optional[int] = None):
+def collect_rss_news_task(
+    self,
+    source_id: Optional[int] = None,
+    source_name: Optional[str] = None,
+    session_id: Optional[int] = None
+):
     """
     RSS 피드 수집 Celery 태스크 (클래스 기반)
     
@@ -73,7 +82,10 @@ def collect_rss_news_task(self, source_id: Optional[int] = None, source_name: Op
         
         # 수집 실행
         # collect() 메서드는 source_id나 source_name을 받아서 처리합니다.
-        result = collector.collect(source_id=source_id, source_name=source_name)
+        result = collector.collect(
+            source_id=source_id,
+            source_name=source_name
+        )
         
         logger.info(
             f"RSS 수집 태스크 완료: {result.get('source', 'All sources')} - "
@@ -294,49 +306,284 @@ def collect_news_task():
     return collect_all_rss_news_task.delay()
 
 
+@shared_task(bind=True, max_retries=3)
+def collect_dcinside_task(
+    self,
+    source_id: Optional[int] = None,
+    session_id: Optional[int] = None
+):
+    """
+    DC Inside 갤러리 수집 Celery 태스크
+    
+    DCInsideCollectorService 클래스를 사용하여 DC Inside 갤러리에서 게시글을 수집합니다.
+    
+    주요 기능:
+    1. DC Inside 갤러리 글 목록 수집
+    2. 개별 게시글 상세 정보 수집
+    3. 중복 수집 방지 (URL 기반)
+    4. 수집 작업 로그 기록
+    
+    Args:
+        source_id: SocialMediaSource 모델의 ID (선택)
+        session_id: CollectionSession ID (선택, 세션 통계 업데이트용)
+        
+    재시도 정책:
+        - max_retries=3: 최대 3번까지 재시도
+        - 네트워크 오류나 일시적 오류 발생 시 자동 재시도
+        
+    사용 예시:
+        # 소스 ID로 수집
+        collect_dcinside_task.delay(source_id=1)
+    """
+    try:
+        # DC Inside 수집 서비스 인스턴스 생성
+        collector = DCInsideCollectorService()
+        
+        # 수집 실행
+        result = collector.collect_from_source(source_id=source_id)
+        
+        logger.info(
+            f"DC Inside 수집 태스크 완료: {result.get('source', 'Unknown')} - "
+            f"상태: {result.get('status')}"
+        )
+        
+        # 세션 통계 업데이트
+        if session_id:
+            try:
+                session = CollectionSession.objects.get(id=session_id)
+                _update_social_media_session_stats(session, result)
+            except CollectionSession.DoesNotExist:
+                logger.warning(f"세션을 찾을 수 없습니다: session_id={session_id}")
+        
+        return result
+        
+    except Exception as e:
+        # 작업 실패 처리
+        error_msg = f"DC Inside 수집 태스크 실패: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        
+        # 세션 통계 업데이트 (실패)
+        if session_id:
+            try:
+                session = CollectionSession.objects.get(id=session_id)
+                session.failed_sources += 1
+                session.save()
+            except CollectionSession.DoesNotExist:
+                pass
+        
+        # Celery 재시도
+        raise self.retry(exc=e, countdown=60)  # 60초 후 재시도
+
+
+@shared_task(bind=True, max_retries=3)
+def collect_reddit_rss_task(
+    self,
+    source_id: Optional[int] = None,
+    session_id: Optional[int] = None
+):
+    """
+    Reddit RSS 피드 수집 Celery 태스크
+    
+    RedditRSSCollectorService 클래스를 사용하여 Reddit RSS 피드에서 게시글을 수집합니다.
+    
+    주요 기능:
+    1. Reddit RSS 피드 파싱
+    2. 중복 수집 방지 (URL 기반)
+    3. 수집 작업 로그 기록
+    
+    Args:
+        source_id: SocialMediaSource 모델의 ID (선택)
+        session_id: CollectionSession ID (선택, 세션 통계 업데이트용)
+        
+    재시도 정책:
+        - max_retries=3: 최대 3번까지 재시도
+        - 네트워크 오류나 일시적 오류 발생 시 자동 재시도
+        
+    사용 예시:
+        # 소스 ID로 수집
+        collect_reddit_rss_task.delay(source_id=1)
+    """
+    try:
+        # Reddit RSS 수집 서비스 인스턴스 생성
+        collector = RedditRSSCollectorService()
+        
+        # 수집 실행
+        result = collector.collect_from_source(source_id=source_id)
+        
+        logger.info(
+            f"Reddit RSS 수집 태스크 완료: {result.get('source', 'Unknown')} - "
+            f"상태: {result.get('status')}"
+        )
+        
+        # 세션 통계 업데이트
+        if session_id:
+            try:
+                session = CollectionSession.objects.get(id=session_id)
+                _update_social_media_session_stats(session, result)
+            except CollectionSession.DoesNotExist:
+                logger.warning(f"세션을 찾을 수 없습니다: session_id={session_id}")
+        
+        return result
+        
+    except Exception as e:
+        # 작업 실패 처리
+        error_msg = f"Reddit RSS 수집 태스크 실패: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        
+        # 세션 통계 업데이트 (실패)
+        if session_id:
+            try:
+                session = CollectionSession.objects.get(id=session_id)
+                session.failed_sources += 1
+                session.save()
+            except CollectionSession.DoesNotExist:
+                pass
+        
+        # Celery 재시도
+        raise self.retry(exc=e, countdown=60)  # 60초 후 재시도
+
+
+@shared_task
+def collect_all_social_media_task():
+    """
+    모든 활성화된 소셜 미디어 소스에서 데이터를 수집하는 Celery 태스크
+    
+    데이터베이스에 등록된 모든 활성화된 소셜 미디어 소스에 대해
+    플랫폼별로 적절한 수집 태스크를 시작합니다.
+    
+    지원 플랫폼:
+    - DC Inside: DCInsideCollectorService 사용
+    - Reddit: RedditRSSCollectorService 사용
+    
+    각 소스는 별도의 비동기 태스크로 실행되므로,
+    여러 소스를 동시에 수집할 수 있습니다.
+    
+    수집이 완료되면 자동으로 리포트(JSON, 마크다운)를 생성합니다.
+    
+    사용 예시:
+        # 모든 활성화된 소셜 미디어 소스 수집 시작
+        collect_all_social_media_task.delay()
+    """
+    # 수집 세션 생성
+    session = CollectionSession.objects.create(
+        status='running',
+        started_at=timezone.now()
+    )
+    
+    # 활성화된 모든 소셜 미디어 소스 조회
+    social_media_sources = SocialMediaSource.objects.filter(
+        is_active=True
+    )
+    
+    session.total_sources = social_media_sources.count()
+    session.save()
+    
+    started_tasks = []
+    failed_sources = []
+    
+    for source in social_media_sources:
+        try:
+            # 플랫폼별로 적절한 태스크 선택
+            if source.platform == 'dcinside':
+                result = collect_dcinside_task.delay(
+                    source_id=source.id,
+                    session_id=session.id
+                )
+            elif source.platform == 'reddit':
+                result = collect_reddit_rss_task.delay(
+                    source_id=source.id,
+                    session_id=session.id
+                )
+            else:
+                logger.warning(
+                    f"지원하지 않는 플랫폼: {source.platform} "
+                    f"(소스 ID: {source.id})"
+                )
+                failed_sources.append({
+                    'source_id': source.id,
+                    'source_name': str(source),
+                    'error': f'지원하지 않는 플랫폼: {source.platform}'
+                })
+                session.failed_sources += 1
+                session.save()
+                continue
+            
+            started_tasks.append({
+                'source_id': source.id,
+                'source_name': str(source),
+                'platform': source.platform,
+                'task_id': result.id
+            })
+            logger.info(
+                f"소셜 미디어 수집 태스크 시작: {str(source)} "
+                f"(플랫폼: {source.platform}, "
+                f"Task ID: {result.id}, Session ID: {session.id})"
+            )
+        except Exception as e:
+            failed_sources.append({
+                'source_id': source.id,
+                'source_name': str(source),
+                'error': str(e)
+            })
+            logger.error(
+                f"소셜 미디어 수집 태스크 시작 실패: {str(source)} - {str(e)}",
+                exc_info=True
+            )
+            # 실패한 소스 카운트 증가
+            session.failed_sources += 1
+            session.save()
+    
+    logger.info(
+        f"소셜 미디어 수집 세션 시작: Session ID={session.id}, "
+        f"총 {session.total_sources}개 소스"
+    )
+    
+    # 세션 완료 체크 및 리포트 생성 태스크 예약
+    check_session_completion.delay(session.id)
+    
+    return {
+        'status': 'started',
+        'session_id': session.id,
+        'sources_count': social_media_sources.count(),
+        'started_tasks': started_tasks,
+        'failed_sources': failed_sources,
+        'message': (
+            f'{len(started_tasks)}개 소셜 미디어 소스에 대한 '
+            f'수집 태스크를 시작했습니다.'
+        )
+    }
+
+
+def _update_social_media_session_stats(
+    session: CollectionSession, result: dict
+):
+    """
+    소셜 미디어 수집 세션 통계 업데이트
+    
+    RSS 수집과 동일한 구조로 통계를 업데이트합니다.
+    """
+    status = result.get('status', '')
+    
+    if status == 'success':
+        session.successful_sources += 1
+        session.total_articles_collected += result.get('items_collected', 0)
+        session.total_articles_skipped += result.get('items_skipped', 0)
+        session.total_articles_error += result.get('items_error', 0)
+    elif status == 'error':
+        session.failed_sources += 1
+    
+    session.save()
+
+
 @shared_task
 def collect_social_media_task():
     """
-    소셜 미디어 데이터 수집 작업
-    - 우선순위 2: 중복 데이터 수집 방지
-    - 우선순위 4: API Rate Limiting
-    - 우선순위 5: 실시간 통계 집계
+    소셜 미디어 데이터 수집 작업 (호환성 유지용)
+    
+    collect_all_social_media_task()의 별칭입니다.
+    기존 코드와의 호환성을 위해 유지됩니다.
+    
+    사용 예시:
+        collect_social_media_task.delay()
     """
-    duplicate_check = DuplicatePreventionService()
-    rate_limit = RateLimitService()
-    stats = RealtimeStatsService()
-    
-    # TODO: 소셜 미디어 플랫폼별 수집
-    platforms = ['twitter', 'facebook']  # TODO: 설정에서 가져오기
-    
-    for platform in platforms:
-        # 우선순위 4: Rate Limit 체크
-        api_key = f"{platform}_api_key"  # TODO: 실제 API 키
-        limit_check = rate_limit.check_rate_limit(
-            identifier=api_key,
-            max_requests=100,  # TODO: 플랫폼별 제한
-            window_seconds=3600
-        )
-        
-        if not limit_check['allowed']:
-            continue
-        
-        # TODO: 소셜 미디어 게시물 가져오기
-        posts = []  # TODO: 실제 API 호출
-        
-        for post in posts:
-            post_id = post.get('id')
-            
-            # 우선순위 2: 중복 체크
-            if duplicate_check.is_already_collected(platform, post_id):
-                continue
-            
-            # TODO: 게시물 수집 및 저장
-            # SocialMediaPost.objects.create(...)
-            
-            # 우선순위 2: 수집 완료 표시
-            duplicate_check.mark_as_collected(platform, post_id)
-            
-            # 우선순위 5: 통계 업데이트
-            stats.increment_counter(f'{platform}_posts_collected')
-            stats.record_timestamp(f'{platform}_post_collected')
+    return collect_all_social_media_task.delay()
