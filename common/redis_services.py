@@ -95,6 +95,7 @@ class DuplicatePreventionService(RedisService):
         super().__init__()  # Redis 연결 초기화
         self.DUPLICATE_PREFIX = "collected:"  # Redis 키 접두사
         self.TTL_DAYS = 7  # 7일 후 자동 삭제 (메모리 절약)
+        self.TTL_SECONDS = self.TTL_DAYS * 24 * 3600  # 604800초 (7일)
     
     def is_already_collected(self, source: str, identifier: str) -> bool:
         """
@@ -144,8 +145,8 @@ class DuplicatePreventionService(RedisService):
             
         동작:
             1. Redis 키 생성
-            2. TTL 계산 (7일을 초 단위로 변환)
-            3. SETEX로 저장 (값은 "1"로 설정, 실제로는 존재 여부만 중요)
+            2. SETEX로 저장 (값은 "1"로 설정, 실제로는 존재 여부만 중요)
+               TTL은 __init__에서 미리 계산된 self.TTL_SECONDS 사용
             
         TTL 설정 이유:
             - 오래된 데이터는 자동으로 삭제하여 메모리 절약
@@ -159,14 +160,11 @@ class DuplicatePreventionService(RedisService):
         # Redis 키 생성
         key = f"{self.DUPLICATE_PREFIX}{source}:{identifier}"
         
-        # TTL 계산: 일(day)을 초(second)로 변환
-        # 7일 = 7 * 24시간 * 3600초 = 604800초
-        ttl_seconds = self.TTL_DAYS * 24 * 3600
-        
         # SETEX: 키와 값, TTL을 함께 설정
         # 값은 "1"로 설정 (실제 값은 중요하지 않음, 존재 여부만 중요)
         # TTL이 지나면 자동으로 삭제됨
-        self.client.setex(key, ttl_seconds, "1")
+        # TTL은 __init__에서 미리 계산된 self.TTL_SECONDS 사용
+        self.client.setex(key, self.TTL_SECONDS, "1")
     
     def get_collected_count(self, source: str) -> int:
         """
@@ -445,6 +443,7 @@ class RealtimeStatsService(RedisService):
         """
         super().__init__()  # Redis 연결 초기화
         self.STATS_PREFIX = "stats:"  # Redis 키 접두사
+        self.TTL_SECONDS = 24 * 3600  # 86400초 (24시간)
     
     def increment_counter(self, metric_name: str, value: int = 1):
         """
@@ -482,10 +481,11 @@ class RealtimeStatsService(RedisService):
         # 원자적 연산으로 동시성 문제 없음
         self.client.incrby(key, value)
         
-        # TTL 설정: 24시간 (86400초)
+        # TTL 설정: 24시간
         # expire 명령어는 키가 존재할 때만 작동
         # 이미 TTL이 설정되어 있어도 새로 설정 가능
-        self.client.expire(key, 86400)
+        self.client.expire(key, self.TTL_SECONDS)
+        
     
     def record_timestamp(self, event_name: str):
         """
@@ -505,9 +505,11 @@ class RealtimeStatsService(RedisService):
             - LPUSH로 앞에 추가 (최신 이벤트가 앞에)
             - LRANGE로 조회 시 최신 순서로 반환
             
+            
         메모리 관리:
             - LTRIM으로 최근 1000개만 유지
             - 24시간 TTL 설정
+            
             
         예시:
             # 기사 수집 완료 시
@@ -533,7 +535,7 @@ class RealtimeStatsService(RedisService):
         self.client.ltrim(key, 0, 999)
         
         # TTL 설정: 24시간
-        self.client.expire(key, 86400)
+        self.client.expire(key, self.TTL_SECONDS)
     
     def get_counter(self, metric_name: str) -> int:
         """
@@ -591,9 +593,56 @@ class RealtimeStatsService(RedisService):
         events = self.client.lrange(key, 0, limit - 1)
         
         # 이벤트는 이미 문자열(ISO 형식)이므로 그대로 반환
-        # JSON 파싱 시도 (혹시 JSON 형식으로 저장된 경우 대비)
-        # 실제로는 ISO 형식 문자열이므로 파싱 실패 시 원본 반환
-        return [json.loads(e) if isinstance(e, str) else e for e in events]
+        return events
+    
+    def increment_hourly_counter(self, metric_name: str, value: int = 1):
+        """
+        시간대별 카운터 증가
+        
+        특정 메트릭의 현재 시간대별 카운터를 증가시킵니다.
+        INCRBY 명령어를 사용하여 원자적(atomic) 연산을 보장합니다.
+        
+        Args:
+            metric_name: 메트릭 이름 (예: 'articles_collected', 'tweets_collected')
+            value: 증가시킬 값 (기본값: 1)
+            
+        Redis 키 형식:
+            "stats:hourly:articles_collected:14"  # 14시(오후 2시)
+            
+        원자적 연산:
+            - INCRBY는 원자적 연산이므로 동시성 문제 없음
+            - 여러 프로세스에서 동시에 호출해도 정확한 카운트 보장
+            
+        TTL 설정:
+            - 24시간 후 자동 삭제
+            - 일일 통계만 유지하여 메모리 절약
+            
+        사용 예시:
+            # 기사 수집 완료 시 (현재 시간대 카운터 증가)
+            stats.increment_hourly_counter('articles_collected')
+            
+            # 여러 개 한 번에 증가
+            stats.increment_hourly_counter('articles_collected', value=5)
+            
+        주의사항:
+            - 현재 시간대의 카운터만 증가
+            - 시간이 바뀌면 새로운 시간대 키가 생성됨
+        """
+        # 현재 시간 객체
+        now = datetime.now()
+        
+        # 시간대별 키 생성
+        # 형식: "stats:hourly:{metric_name}:{hour}"
+        hourly_key = f"{self.STATS_PREFIX}hourly:{metric_name}:{now.hour}"
+        
+        # INCRBY: 카운터를 value만큼 증가
+        # 원자적 연산으로 동시성 문제 없음
+        self.client.incrby(hourly_key, value)
+        
+        # TTL 설정: 24시간
+        # expire 명령어는 키가 존재할 때만 작동
+        # 이미 TTL이 설정되어 있어도 새로 설정 가능
+        self.client.expire(hourly_key, self.TTL_SECONDS)
     
     def get_hourly_stats(self, metric_name: str) -> Dict:
         """
@@ -684,7 +733,8 @@ class RAGCacheService(RedisService):
         """
         super().__init__()  # Redis 연결 초기화
         self.CACHE_PREFIX = "rag:query:"  # Redis 키 접두사
-        self.CACHE_TTL = 3600 * 24  # 24시간 (초 단위)
+        # TTL 설정: 24시간 (초 단위로 미리 계산)
+        self.CACHE_TTL = 24 * 3600  # 86400초 (24시간)
     
     def get_cache_key(self, query: str) -> str:
         """
@@ -859,16 +909,20 @@ class RateLimitService(RedisService):
         """
         Rate Limiting 서비스 초기화
         
-        Redis 연결을 설정하고, 키 접두사를 설정합니다.
+        Redis 연결을 설정하고, 키 접두사와 기본값을 설정합니다.
         """
         super().__init__()  # Redis 연결 초기화
         self.RATE_LIMIT_PREFIX = "ratelimit:"  # Redis 키 접두사
+        # 기본 Rate Limit 설정
+        # 필요시 check_rate_limit() 호출 시 다른 값으로 오버라이드 가능
+        self.DEFAULT_MAX_REQUESTS = 100  # 기본 최대 요청 수 (시간당)
+        self.DEFAULT_WINDOW_SECONDS = 3600  # 기본 시간 윈도우 (1시간, 초 단위)
     
     def check_rate_limit(
         self,
         identifier: str,  # API 키, IP, 사용자 ID 등
-        max_requests: int,
-        window_seconds: int
+        max_requests: Optional[int] = None,  # None이면 기본값 사용
+        window_seconds: Optional[int] = None  # None이면 기본값 사용
     ) -> Dict[str, Any]:
         """
         Rate Limit 체크
@@ -877,8 +931,10 @@ class RateLimitService(RedisService):
         
         Args:
             identifier: 식별자 (API 키, IP 주소, 사용자 ID 등)
-            max_requests: 시간 윈도우 내 최대 요청 수
+            max_requests: 시간 윈도우 내 최대 요청 수 
+                         (None이면 기본값 사용: self.DEFAULT_MAX_REQUESTS)
             window_seconds: 시간 윈도우 크기 (초 단위)
+                           (None이면 기본값 사용: self.DEFAULT_WINDOW_SECONDS)
             
         Returns:
             {
@@ -903,10 +959,14 @@ class RateLimitService(RedisService):
             - TTL이 지나면 자동으로 키 삭제 (리셋)
             
         예시:
+            # 기본값 사용 (시간당 100회)
+            check = rate_limit.check_rate_limit('api_key_123')
+            
+            # 커스텀 값 사용
             check = rate_limit.check_rate_limit(
                 'api_key_123',
-                max_requests=100,
-                window_seconds=3600
+                max_requests=50,  # 시간당 50회
+                window_seconds=3600  # 1시간
             )
             
             if check['allowed']:
@@ -914,12 +974,22 @@ class RateLimitService(RedisService):
             else:
                 print(f"요청 거부, 리셋 시간: {check['reset_at']}")
         """
+        # 기본값 설정 (파라미터가 None이면 기본값 사용)
+        max_requests = max_requests or self.DEFAULT_MAX_REQUESTS
+        window_seconds = window_seconds or self.DEFAULT_WINDOW_SECONDS
+        
         # Redis 키 생성
+        # identifier는 문자열(예: 'api_key_123', '192.168.1.1')이고
+        # 이것을 키 이름으로 사용합니다
         key = f"{self.RATE_LIMIT_PREFIX}{identifier}"
         
         # 현재 요청 수 조회
-        # GET 명령어로 현재 카운터 값 가져오기
+        # GET 명령어로 Redis에 저장된 카운터 값 가져오기
+        # decode_responses=True로 인해 문자열로 반환됨 (예: "1", "2", "3")
+        # 저장된 값은 숫자 카운터이므로 int()로 변환 필요
         current = self.client.get(key)
+        # current가 None이면 키가 없음(아직 요청 없음) → 0
+        # current가 문자열이면 int()로 변환 (예: "1" → 1)
         current_count = int(current) if current else 0
         
         # 최대치 초과 확인
