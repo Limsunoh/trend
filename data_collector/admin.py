@@ -7,7 +7,13 @@ Django Admin은 웹 브라우저를 통해 데이터를 확인하고 관리할 �
 from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
-from .models import NewsSource, NewsArticle, SocialMediaPost, DataCollectionJob
+from .models import (
+    NewsSource,
+    NewsArticle,
+    SocialMediaPost,
+    DataCollectionJob,
+    CollectionSession
+)
 
 
 @admin.register(NewsSource)
@@ -279,3 +285,92 @@ class SocialMediaPostAdmin(admin.ModelAdmin):
     모델이 구현되면 추가 설정이 필요합니다.
     """
     pass
+
+
+@admin.register(CollectionSession)
+class CollectionSessionAdmin(admin.ModelAdmin):
+    """
+    수집 세션 관리 클래스
+    
+    Django Admin에서 수집 세션을 관리할 때 표시되는 내용과 동작을 정의합니다.
+    """
+    # 목록 페이지에 표시할 필드들
+    list_display = [
+        'id',
+        'status',
+        'started_at',
+        'completed_at',
+        'duration_display',
+        'total_sources',
+        'successful_sources',
+        'failed_sources',
+        'total_articles_collected',
+    ]
+    
+    # 필터링 옵션
+    list_filter = [
+        'status',
+        'started_at',
+        'completed_at',
+    ]
+    
+    # 날짜 계층 구조
+    date_hierarchy = 'started_at'
+    
+    # 읽기 전용 필드
+    readonly_fields = [
+        'started_at',
+        'completed_at',
+        'duration_seconds',
+        'total_sources',
+        'successful_sources',
+        'failed_sources',
+        'total_articles_collected',
+        'total_articles_skipped',
+        'total_articles_error',
+        'json_report_path',
+        'markdown_report_path',
+    ]
+    
+    # 필드 그룹화
+    fieldsets = (
+        ('기본 정보', {
+            'fields': ('status', 'started_at', 'completed_at', 'duration_seconds')
+        }),
+        ('소스 통계', {
+            'fields': ('total_sources', 'successful_sources', 'failed_sources')
+        }),
+        ('기사 통계', {
+            'fields': (
+                'total_articles_collected',
+                'total_articles_skipped',
+                'total_articles_error'
+            )
+        }),
+        ('리포트', {
+            'fields': ('json_report_path', 'markdown_report_path'),
+            'classes': ('collapse',)
+        }),
+        ('메모', {
+            'fields': ('notes',),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    # 추가/수정 금지 (세션은 읽기 전용)
+    def has_add_permission(self, request):
+        return False
+    
+    def has_change_permission(self, request, obj=None):
+        return False
+    
+    # 커스텀 메서드: 소요 시간 표시
+    def duration_display(self, obj):
+        """소요 시간을 읽기 쉬운 형식으로 표시"""
+        if obj.duration_seconds:
+            minutes = int(obj.duration_seconds // 60)
+            seconds = int(obj.duration_seconds % 60)
+            return f"{minutes}분 {seconds}초"
+        return "-"
+    
+    duration_display.short_description = '소요 시간'

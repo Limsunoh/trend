@@ -1,14 +1,17 @@
 from rest_framework.routers import DefaultRouter
+from django.urls import path
 from .views import (
     NewsSourceCreateCSVViewSet,
     NewsSourceCreateViewSet,
     NewsSourceViewSet,
     NewsArticleViewSet,
+    SocialMediaSourceViewSet,
     SocialMediaPostViewSet,
     DataCollectionJobViewSet,
     NewsArticleCollectionViewSet,
     SocialMediaCollectionViewSet,
-    AllCollectionViewSet
+    AllCollectionViewSet,
+    ThumbnailProxyView
 )
 
 router = DefaultRouter()
@@ -25,6 +28,7 @@ router.register(
     basename='rss-source-create'
 )
 router.register(r'sources', NewsSourceViewSet, basename='source')
+router.register(r'social-sources', SocialMediaSourceViewSet, basename='social-source')
 router.register(r'news', NewsArticleViewSet, basename='news')
 router.register(r'social', SocialMediaPostViewSet, basename='social')
 router.register(r'jobs', DataCollectionJobViewSet, basename='job')
@@ -34,14 +38,17 @@ router.register(
     basename='all-collection-trigger'
 )
 router.register(
-    r'news-article-collection/trigger',
+    r'news-collection/trigger',
     NewsArticleCollectionViewSet,
-    basename='news-article-collection-trigger'
+    basename='news-collection-trigger'
 )
 router.register(
-    r'social-media-collection/trigger',
+    r'social-collection/trigger',
     SocialMediaCollectionViewSet,
-    basename='social-media-collection-trigger'
+    basename='social-collection-trigger'
 )
 
-urlpatterns = router.urls
+# 이미지 프록시 엔드포인트 (router 외부)
+urlpatterns = router.urls + [
+    path('thumbnail-proxy/', ThumbnailProxyView.as_view(), name='thumbnail-proxy'),
+]
