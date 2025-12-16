@@ -1,5 +1,7 @@
 from django.db import models
 from django.utils import timezone
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 
 
 class NewsSource(models.Model):
@@ -572,16 +574,25 @@ class DataCollectionJob(models.Model):
         ('failed', '실패'),
     ]
     
-    # 뉴스 소스 (외래키, 선택적)
-    source = models.ForeignKey(
-        NewsSource,
-        on_delete=models.SET_NULL,
+    # GenericForeignKey를 위한 필드들
+    # 어떤 타입의 모델인지 저장 (NewsSource 또는 SocialMediaSource)
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
         null=True,
         blank=True,
-        related_name='collection_jobs',
-        verbose_name='뉴스 소스',
-        help_text='이 작업이 실행된 뉴스 소스'
+        verbose_name='소스 타입',
+        help_text='수집 소스의 모델 타입 (NewsSource 또는 SocialMediaSource)'
     )
+    # 해당 모델의 ID 저장
+    object_id = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name='소스 ID',
+        help_text='수집 소스의 ID'
+    )
+    # GenericForeignKey: 위 두 필드를 조합하여 실제 객체 참조
+    source = GenericForeignKey('content_type', 'object_id')
     
     # 작업 상태
     status = models.CharField(
@@ -628,8 +639,22 @@ class DataCollectionJob(models.Model):
         ordering = ['-started_at']
     
     def __str__(self):
-        source_name = str(self.source) if self.source else 'Unknown'
-        return f"{source_name} - {self.get_status_display()} ({self.started_at})"
+        if self.source:
+            source_name = str(self.source)
+            source_type = self.content_type.model if self.content_type else 'Unknown'
+            return f"[{source_type}] {source_name} - {self.get_status_display()} ({self.started_at})"
+        return f"Unknown - {self.get_status_display()} ({self.started_at})"
+    
+    @property
+    def source_type(self):
+        """소스 타입 반환 (news 또는 social_media)"""
+        if not self.content_type:
+            return None
+        if self.content_type.model == 'newssource':
+            return 'news'
+        elif self.content_type.model == 'socialmediasource':
+            return 'social_media'
+        return None
 
 
 class CollectionSession(models.Model):

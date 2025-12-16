@@ -1,0 +1,50 @@
+{
+  "id": 22,
+  "started_at": "2025-12-16T05:25:57.963946+00:00",
+  "completed_at": "2025-12-16T05:26:48.015245+00:00",
+  "status": "completed",
+  "total_sources": 4,
+  "successful_sources": 4,
+  "failed_sources": 0,
+  "total_articles_collected": 116,
+  "total_articles_skipped": 109,
+  "total_articles_error": 0,
+  "duration_seconds": 50.051299,
+  "json_report_path": null,
+  "markdown_report_path": null,
+  "jobs": [
+    {
+      "source": "Reddit - 레딧 기술",
+      "status": "completed",
+      "started_at": "2025-12-16T05:26:46.910689+00:00",
+      "completed_at": "2025-12-16T05:26:47.939958+00:00",
+      "items_collected": 22,
+      "error_message": null
+    },
+    {
+      "source": "Reddit - 레딧 인기",
+      "status": "completed",
+      "started_at": "2025-12-16T05:26:45.895972+00:00",
+      "completed_at": "2025-12-16T05:26:46.840104+00:00",
+      "items_collected": 24,
+      "error_message": null
+    },
+    {
+      "source": "Reddit - 레딧 뉴스",
+      "status": "completed",
+      "started_at": "2025-12-16T05:26:44.513440+00:00",
+      "completed_at": "2025-12-16T05:26:45.722370+00:00",
+      "items_collected": 21,
+      "error_message": null
+    },
+    {
+      "source": "DC Inside - DC Inside 실시간 베스트 갤러리",
+      "status": "completed",
+      "started_at": "2025-12-16T05:26:00.099811+00:00",
+      "completed_at": "2025-12-16T05:26:44.438521+00:00",
+      "items_collected": 49,
+      "error_message": null
+    }
+  ],
+  "jobs_count": 4
+}

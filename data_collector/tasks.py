@@ -230,8 +230,10 @@ def check_session_completion(session_id: int):
     세션 완료 여부를 체크하고, 완료되었으면 리포트 생성
     
     모든 작업이 완료되었는지 확인하고, 완료되면 리포트를 생성합니다.
+    News와 Social Media 세션 모두 지원합니다.
     """
     from datetime import timedelta
+    from django.contrib.contenttypes.models import ContentType
     
     try:
         session = CollectionSession.objects.get(id=session_id)
@@ -239,10 +241,45 @@ def check_session_completion(session_id: int):
         logger.error(f"세션을 찾을 수 없습니다: session_id={session_id}")
         return
     
+    # 이미 완료된 세션이면 더 이상 체크하지 않음
+    if session.status != 'running':
+        logger.info(
+            f"세션 #{session.id}은 이미 {session.status} 상태입니다. "
+            f"체크를 중단합니다."
+        )
+        return
+    
+    # 세션 상태를 DB에서 다시 조회 (캐시 문제 방지)
+    session.refresh_from_db()
+    if session.status != 'running':
+        logger.info(
+            f"세션 #{session.id}이 {session.status} 상태로 변경되었습니다. "
+            f"체크를 중단합니다."
+        )
+        return
+    
     # 세션 시작 이후의 작업 확인
+    # 세션 타입에 따라 필터링: News 세션은 NewsSource만, Social Media 세션은 SocialMediaSource만
     jobs = DataCollectionJob.objects.filter(
         started_at__gte=session.started_at
     )
+    
+    # 세션의 소스 타입 확인
+    # News 세션인지 Social Media 세션인지 판단
+    # News 세션은 total_sources > 0이고, Social Media 세션도 total_sources > 0이지만
+    # 실제로는 세션 시작 시점의 작업 타입으로 구분
+    # 더 정확하게는 세션 시작 이후 생성된 첫 번째 작업의 타입으로 판단
+    first_job = jobs.order_by('started_at').first()
+    if first_job and first_job.content_type:
+        # 첫 번째 작업의 타입으로 세션 타입 결정
+        if first_job.content_type.model == 'newssource':
+            # News 세션: NewsSource 작업만 필터링
+            news_content_type = ContentType.objects.get_for_model(NewsSource)
+            jobs = jobs.filter(content_type=news_content_type)
+        elif first_job.content_type.model == 'socialmediasource':
+            # Social Media 세션: SocialMediaSource 작업만 필터링
+            social_content_type = ContentType.objects.get_for_model(SocialMediaSource)
+            jobs = jobs.filter(content_type=social_content_type)
     
     completed_jobs = jobs.filter(status='completed').count()
     failed_jobs = jobs.filter(status='failed').count()
@@ -259,6 +296,38 @@ def check_session_completion(session_id: int):
     if all_tasks_done or time_since_start > timedelta(hours=2):
         if session.status == 'running':
             session.mark_completed()
+            
+            # 세션 완료 시 이미 예약된 check_session_completion 태스크 취소
+            try:
+                from celery import current_app
+                celery_app = current_app
+                inspect = celery_app.control.inspect()
+                scheduled = inspect.scheduled() or {}
+                reserved = inspect.reserved() or {}
+                
+                cancelled_count = 0
+                for worker, tasks in {**scheduled, **reserved}.items():
+                    for task in tasks:
+                        task_name = task.get('name', '') or task.get('task', '')
+                        task_args = task.get('args', []) or task.get('request', {}).get('args', [])
+                        
+                        if 'check_session_completion' in task_name and session_id in task_args:
+                            task_id = task.get('id') or task.get('request', {}).get('id')
+                            if task_id:
+                                try:
+                                    celery_app.control.revoke(task_id, terminate=True)
+                                    cancelled_count += 1
+                                except Exception:
+                                    pass
+                
+                if cancelled_count > 0:
+                    logger.info(
+                        f"세션 #{session.id} 완료 시 "
+                        f"{cancelled_count}개의 예약된 "
+                        f"check_session_completion 태스크 취소"
+                    )
+            except Exception as e:
+                logger.warning(f"예약된 태스크 취소 실패: {e}")
             
             # 리포트 생성
             try:
@@ -281,15 +350,25 @@ def check_session_completion(session_id: int):
                 )
     else:
         # 아직 완료되지 않았으면 5분 후 다시 체크
-        remaining = session.total_sources - (completed_jobs + failed_jobs)
-        logger.info(
-            f"세션 #{session.id} 아직 진행 중. "
-            f"남은 작업: 약 {remaining}개. 5분 후 다시 체크합니다."
-        )
-        check_session_completion.apply_async(
-            args=[session_id],
-            countdown=300  # 5분 후
-        )
+        # 단, 세션이 여전히 running 상태인지 확인
+        # DB에서 최신 상태를 다시 조회
+        session.refresh_from_db()
+        if session.status == 'running':
+            remaining = session.total_sources - (completed_jobs + failed_jobs)
+            logger.info(
+                f"세션 #{session.id} 아직 진행 중. "
+                f"남은 작업: 약 {remaining}개. 5분 후 다시 체크합니다."
+            )
+            check_session_completion.apply_async(
+                args=[session_id],
+                countdown=300  # 5분 후
+            )
+        else:
+            # 세션이 running 상태가 아니면 더 이상 체크하지 않음
+            logger.info(
+                f"세션 #{session.id}이 {session.status} 상태로 변경되었습니다. "
+                f"체크를 중단합니다."
+            )
 
 
 @shared_task

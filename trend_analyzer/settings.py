@@ -230,3 +230,41 @@ EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'sentence-transformers/paraphrase
 VECTOR_DB_PATH = os.getenv('VECTOR_DB_PATH', BASE_DIR / 'vector_db')
 CHROMA_PERSIST_DIR = os.getenv('CHROMA_PERSIST_DIR', BASE_DIR / 'chroma_db')
 
+# Logging Configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{levelname}] {asctime} {module} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '[{levelname}] {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'data_collector': {
+            'handlers': ['console'],
+            'level': 'DEBUG',  # DEBUG 레벨로 설정하여 상세 로그 확인
+            'propagate': False,
+        },
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
