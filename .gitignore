@@ -1,5 +1,5 @@
 NewsSource_RSS.csv
-
+TROUBLESHOOTING.md
 
 # Python
 __pycache__/
@@ -65,4 +65,7 @@ dump.rdb
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Reports
+reports/
 
