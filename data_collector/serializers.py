@@ -14,7 +14,7 @@ Serializer의 역할:
 - 데이터 검증 (Validation)
 - 중첩된 관계 표현 (Nested Relationships)
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from rest_framework import serializers
 from .models import NewsSource, NewsArticle, SocialMediaSource, SocialMediaPost, DataCollectionJob
 
@@ -233,7 +233,7 @@ class NewsArticleSerializer(serializers.ModelSerializer):
         help_text='뉴스 소스 이름'
     )
     
-    def get_source_name(self, obj):
+    def get_source_name(self, obj: NewsArticle) -> str:
         return str(obj.source) if obj.source else 'Unknown'
     
     # 제목 요약 (긴 제목을 짧게)
@@ -307,7 +307,7 @@ class NewsArticleSerializer(serializers.ModelSerializer):
             },
         }
     
-    def get_title_short(self, obj):
+    def get_title_short(self, obj: NewsArticle) -> str:
         """
         제목을 50자로 제한하여 반환하는 메서드
         
@@ -401,16 +401,19 @@ class DataCollectionJobSerializer(serializers.ModelSerializer):
         json_data = serializer.data
     """
     
-    # 소스 정보 (중첩)
-    source_detail = NewsSourceSerializer(
-        source='source',
-        read_only=True,
-        help_text='뉴스 소스 상세 정보 (소스가 삭제된 경우 None)'
+    # 소스 정보 (중첩) - GenericForeignKey에 맞게 수정
+    source_detail = serializers.SerializerMethodField(
+        help_text='소스 상세 정보 (NewsSource 또는 SocialMediaSource)'
+    )
+    
+    # 소스 타입
+    source_type = serializers.SerializerMethodField(
+        help_text='소스 타입 (news 또는 social_media)'
     )
     
     # 소스 이름
     source_name = serializers.SerializerMethodField(
-        help_text='뉴스 소스 이름 (소스가 삭제된 경우 "Unknown")'
+        help_text='소스 이름 (소스가 삭제된 경우 "Unknown")'
     )
     
     # 상태 표시 이름
@@ -465,11 +468,37 @@ class DataCollectionJobSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {}
     
-    def get_source_name(self, obj):
+    def get_source_detail(self, obj: DataCollectionJob) -> Optional[Dict[str, Any]]:
+        """
+        소스 상세 정보를 반환하는 메서드 (GenericForeignKey 지원)
+        
+        Args:
+            obj: 직렬화할 모델 인스턴스 (DataCollectionJob)
+            
+        Returns:
+            NewsSource 또는 SocialMediaSource의 직렬화된 데이터
+        """
+        if not obj.source:
+            return None
+        
+        # 소스 타입에 따라 적절한 Serializer 사용
+        if obj.content_type and obj.content_type.model == 'newssource':
+            return NewsSourceSerializer(obj.source).data
+        elif obj.content_type and obj.content_type.model == 'socialmediasource':
+            # SocialMediaSourceSerializer는 같은 파일에 정의되어 있음
+            return SocialMediaSourceSerializer(obj.source).data
+        
+        return None
+    
+    def get_source_type(self, obj: DataCollectionJob) -> Optional[str]:
+        """소스 타입 반환 (news 또는 social_media)"""
+        return obj.source_type
+    
+    def get_source_name(self, obj: DataCollectionJob) -> str:
         """
         소스 이름을 반환하는 메서드
         
-        소스가 삭제된 경우(SET_NULL) None일 수 있으므로 안전하게 처리합니다.
+        소스가 삭제된 경우 None일 수 있으므로 안전하게 처리합니다.
         
         Args:
             obj: 직렬화할 모델 인스턴스 (DataCollectionJob)
@@ -479,7 +508,7 @@ class DataCollectionJobSerializer(serializers.ModelSerializer):
         """
         return str(obj.source) if obj.source else 'Unknown'
     
-    def get_duration(self, obj):
+    def get_duration(self, obj: DataCollectionJob) -> str:
         """
         작업 소요 시간을 계산하여 반환하는 메서드
         
@@ -731,19 +760,48 @@ class BaseSocialMediaPostSerializer(serializers.ModelSerializer):
             'url',  # URL은 수집 시 자동 설정
         ]
     
-    def get_source_name(self, obj):
+    def get_source_name(self, obj: SocialMediaPost) -> str:
         """소스 이름 반환"""
         return str(obj.source) if obj.source else 'Unknown'
     
-    def get_platform(self, obj):
+    def get_platform(self, obj: SocialMediaPost) -> Optional[str]:
         """플랫폼 타입 반환"""
         return obj.platform if obj.source else None
     
-    def get_title_short(self, obj):
+    def get_title_short(self, obj: SocialMediaPost) -> str:
         """제목을 50자로 제한하여 반환"""
         if obj.title and len(obj.title) > 50:
             return obj.title[:50] + '...'
         return obj.title or ''
+    
+    def to_representation(self, instance):
+        """
+        썸네일 URL을 프록시 URL로 변환
+        
+        DC Inside 등 Referer가 필요한 이미지는 프록시를 통해 제공합니다.
+        Reddit 이미지는 원본 URL을 그대로 사용합니다.
+        """
+        representation = super().to_representation(instance)
+        
+        thumbnail_url = representation.get('thumbnail_url')
+        if thumbnail_url:
+            # DC Inside 이미지는 프록시 URL로 변환
+            if ('dcinside' in thumbnail_url.lower() or 
+                'dcimg' in thumbnail_url.lower() or 
+                'dccdn' in thumbnail_url.lower()):
+                from urllib.parse import quote
+                # 프록시 URL 생성
+                encoded_url = quote(thumbnail_url, safe='')
+                request = self.context.get('request')
+                
+                if request:
+                    base_url = request.build_absolute_uri('/')[:-1]  # 마지막 슬래시 제거
+                    representation['thumbnail_url'] = f"{base_url}/api/collector/thumbnail-proxy/?url={encoded_url}"
+                else:
+                    # request가 없으면 상대 경로 사용
+                    representation['thumbnail_url'] = f"/api/collector/thumbnail-proxy/?url={encoded_url}"
+        
+        return representation
 
 
 class RedditPostSerializer(BaseSocialMediaPostSerializer):
@@ -867,6 +925,7 @@ class DCInsidePostSerializer(BaseSocialMediaPostSerializer):
             'collected_at', 'collected_at_display',
             'likes_count', 'comments_count', 'shares_count', 'views_count',
             'gall_name', 'post_num', 'ip', 'images',
+            'thumbnail_url',
             'raw_data', 'is_processed'
         ]
         
@@ -896,6 +955,14 @@ class DCInsidePostSerializer(BaseSocialMediaPostSerializer):
                 'help_text': '게시글에 포함된 이미지 URL 목록 (JSON 배열)',
             },
         }
+    
+    def to_representation(self, instance):
+        """
+        DC Inside 썸네일 URL을 프록시 URL로 변환
+        
+        부모 클래스의 to_representation을 호출하여 프록시 URL 변환을 보장합니다.
+        """
+        return super().to_representation(instance)
     
     def validate(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """DC Inside 게시물 검증"""

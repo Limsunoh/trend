@@ -4,14 +4,20 @@
 import logging
 from rest_framework import viewsets, status
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import QuerySet
+from django.http import HttpResponse
+from django.shortcuts import redirect
+import requests
 from .models import (
     NewsSource,
     NewsArticle,
     SocialMediaSource,
     SocialMediaPost,
-    DataCollectionJob
+    DataCollectionJob,
+    CollectionSession
 )
 from .serializers import (
     NewsSourceSerializer,
@@ -241,6 +247,135 @@ class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
             return BaseSocialMediaPostSerializer
 
 
+class ThumbnailProxyView(APIView):
+    """
+    썸네일 이미지 프록시 뷰
+    
+    DC Inside 등 Referer 헤더가 필요한 이미지를 프록시를 통해 제공합니다.
+    Reddit 이미지는 그대로 리다이렉트합니다.
+    """
+    permission_classes = [AllowAny]  # 인증 없이 접근 가능
+    
+    def get(self, request):
+        """
+        썸네일 이미지 프록시
+        
+        Query Parameters:
+            url: 프록시할 이미지 URL (필수)
+        """
+        image_url = request.query_params.get('url')
+        
+        if not image_url:
+            return Response(
+                {'error': 'url 파라미터가 필요합니다.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from urllib.parse import unquote
+            
+            # URL 디코딩
+            image_url = unquote(image_url)
+            
+            # Reddit 이미지는 그대로 리다이렉트 (이미 접근 가능)
+            if 'reddit' in image_url.lower() or 'redd.it' in image_url.lower():
+                return redirect(image_url)
+            
+            # DC Inside 등 Referer가 필요한 이미지는 프록시
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://gall.dcinside.com/',
+            }
+            
+            # 이미지 다운로드
+            response = requests.get(image_url, headers=headers, timeout=10, stream=True)
+            response.raise_for_status()
+            
+            # 이미지 데이터 가져오기
+            image_data = response.content
+            
+            # Content-Type 확인 (실제 이미지 데이터의 매직 넘버로 감지)
+            content_type = response.headers.get('Content-Type', '')
+            
+            # Content-Type이 application/octet-stream이거나 이미지가 아닌 경우,
+            # 실제 이미지 데이터의 매직 넘버로 감지
+            if (not content_type or 
+                content_type.startswith('application/octet-stream') or
+                not content_type.startswith('image/')):
+                
+                # 이미지 파일 시그니처(매직 넘버)로 감지
+                if len(image_data) >= 4:
+                    # JPEG: FF D8 FF
+                    if image_data[:3] == b'\xff\xd8\xff':
+                        content_type = 'image/jpeg'
+                    # PNG: 89 50 4E 47
+                    elif image_data[:4] == b'\x89PNG':
+                        content_type = 'image/png'
+                    # GIF: 47 49 46 38 (GIF8)
+                    elif image_data[:4] == b'GIF8':
+                        content_type = 'image/gif'
+                    # WebP: 52 49 46 46 ... 57 45 42 50 (RIFF...WEBP)
+                    elif len(image_data) >= 12 and image_data[:4] == b'RIFF' and image_data[8:12] == b'WEBP':
+                        content_type = 'image/webp'
+                    else:
+                        # URL 확장자로 추론 (매직 넘버로 감지 실패 시)
+                        if '.png' in image_url.lower():
+                            content_type = 'image/png'
+                        elif '.gif' in image_url.lower():
+                            content_type = 'image/gif'
+                        elif '.webp' in image_url.lower():
+                            content_type = 'image/webp'
+                        else:
+                            # 기본값: JPEG
+                            content_type = 'image/jpeg'
+                else:
+                    # 데이터가 너무 짧으면 기본값 사용
+                    content_type = 'image/jpeg'
+            
+            # Content-Type에서 charset 제거 (이미지에는 불필요)
+            if ';' in content_type:
+                content_type = content_type.split(';')[0].strip()
+            
+            # 최종적으로 image/로 시작하지 않으면 강제로 image/jpeg 설정
+            if not content_type.startswith('image/'):
+                content_type = 'image/jpeg'
+            
+            # 이미지 데이터를 HttpResponse로 반환 (인라인 표시)
+            # Content-Type을 명시적으로 설정하여 브라우저가 이미지로 인식하도록 함
+            http_response = HttpResponse(
+                image_data,
+                content_type=content_type
+            )
+            
+            # Content-Disposition 헤더를 'inline'으로 명시적으로 설정
+            # 다운로드가 아닌 브라우저 내에서 직접 표시되도록 함
+            http_response['Content-Disposition'] = 'inline; filename="thumbnail.jpg"'
+            
+            # 캐싱 헤더 추가
+            http_response['Cache-Control'] = 'public, max-age=3600'
+            
+            # CORS 헤더 추가 (필요한 경우)
+            http_response['Access-Control-Allow-Origin'] = '*'
+            
+            # X-Content-Type-Options 헤더 추가 (브라우저가 Content-Type을 무시하지 않도록)
+            http_response['X-Content-Type-Options'] = 'nosniff'
+            
+            return http_response
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"이미지 프록시 실패: {image_url}, 에러: {str(e)}")
+            return Response(
+                {'error': f'이미지를 가져올 수 없습니다: {str(e)}'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+        except Exception as e:
+            logger.error(f"이미지 프록시 예외: {image_url}, 에러: {str(e)}")
+            return Response(
+                {'error': f'서버 오류: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 class DataCollectionJobViewSet(viewsets.ReadOnlyModelViewSet):
     """데이터 수집 작업 로그 ViewSet (읽기 전용)"""
     queryset = DataCollectionJob.objects.all()
@@ -253,9 +388,11 @@ class DataCollectionJobViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = DataCollectionJob.objects.all()
         queryset = filter_queryset_by_params(
             queryset, self.request,
-            {'source': 'int', 'status': 'str'}
+            {'status': 'str'}
         )
-        return queryset.select_related('source')
+        # GenericForeignKey는 select_related로 최적화할 수 없으므로
+        # prefetch_related를 사용하거나 content_type만 select_related
+        return queryset.select_related('content_type')
 
 
 class NewsArticleCollectionViewSet(viewsets.ViewSet):
@@ -277,9 +414,32 @@ class NewsArticleCollectionViewSet(viewsets.ViewSet):
     def create(self, request):
         """
         모든 활성화된 뉴스 소스에서 수집 작업 시작
-        
-        이 엔드포인트는 전체 수집만 담당합니다.
+        중복 실행 방지: 최근 5분 이내에 실행 중인 세션이 있으면 새로 시작하지 않습니다.
         """
+        from datetime import timedelta
+        from django.utils import timezone
+        from .models import CollectionSession
+        
+        # 중복 실행 방지: 최근 5분 이내에 실행 중인 News 세션이 있는지 확인
+        recent_time = timezone.now() - timedelta(minutes=5)
+        running_sessions = CollectionSession.objects.filter(
+            status='running',
+            started_at__gte=recent_time,
+            total_sources__gt=0  # News 세션은 total_sources > 0
+        )
+        
+        if running_sessions.exists():
+            recent_session = running_sessions.order_by('-started_at').first()
+            return Response({
+                'status': 'already_running',
+                'message': (
+                    f'이미 뉴스 수집 작업이 실행 중입니다. '
+                    f'세션 ID: {recent_session.id}, '
+                    f'시작 시간: {recent_session.started_at.strftime("%Y-%m-%d %H:%M:%S")}'
+                ),
+                'session_id': recent_session.id
+            }, status=status.HTTP_409_CONFLICT)
+        
         try:
             # 전체 뉴스 소스 수집
             task_result = collect_all_rss_news_task.delay()
@@ -351,9 +511,31 @@ class SocialMediaCollectionViewSet(viewsets.ViewSet):
     def create(self, request):
         """
         모든 활성화된 소셜 미디어 소스에서 수집 작업 시작
-        
-        이 엔드포인트는 전체 수집만 담당합니다.
+        중복 실행 방지: 최근 5분 이내에 실행 중인 세션이 있으면 새로 시작하지 않습니다.
         """
+        from datetime import timedelta
+        from django.utils import timezone
+        from .models import CollectionSession
+        
+        # 중복 실행 방지: 최근 5분 이내에 실행 중인 Social Media 세션이 있는지 확인
+        recent_time = timezone.now() - timedelta(minutes=5)
+        running_sessions = CollectionSession.objects.filter(
+            status='running',
+            started_at__gte=recent_time
+        )
+        
+        if running_sessions.exists():
+            recent_session = running_sessions.order_by('-started_at').first()
+            return Response({
+                'status': 'already_running',
+                'message': (
+                    f'이미 소셜 미디어 수집 작업이 실행 중입니다. '
+                    f'세션 ID: {recent_session.id}, '
+                    f'시작 시간: {recent_session.started_at.strftime("%Y-%m-%d %H:%M:%S")}'
+                ),
+                'session_id': recent_session.id
+            }, status=status.HTTP_409_CONFLICT)
+        
         try:
             # 전체 소셜 미디어 소스 수집
             task_result = collect_all_social_media_task.delay()
@@ -415,9 +597,32 @@ class AllCollectionViewSet(viewsets.ViewSet):
     def create(self, request):
         """
         모든 활성화된 News와 Social Media 소스에서 수집 작업 시작
-        
-        News와 Social Media 수집을 동시에 시작합니다.
+        중복 실행 방지: 최근 5분 이내에 실행 중인 세션이 있으면 새로 시작하지 않습니다.
         """
+        from datetime import timedelta
+        from django.utils import timezone
+        from .models import CollectionSession
+        
+        # 중복 실행 방지: 최근 5분 이내에 실행 중인 세션이 있는지 확인
+        recent_time = timezone.now() - timedelta(minutes=5)
+        running_sessions = CollectionSession.objects.filter(
+            status='running',
+            started_at__gte=recent_time
+        )
+        
+        if running_sessions.exists():
+            recent_session = running_sessions.order_by('-started_at').first()
+            return Response({
+                'status': 'already_running',
+                'message': (
+                    f'이미 수집 작업이 실행 중입니다. '
+                    f'세션 ID: {recent_session.id}, '
+                    f'시작 시간: {recent_session.started_at.strftime("%Y-%m-%d %H:%M:%S")}'
+                ),
+                'session_id': recent_session.id,
+                'started_at': recent_session.started_at.isoformat()
+            }, status=status.HTTP_409_CONFLICT)
+        
         try:
             # News 전체 수집
             news_task_result = collect_all_rss_news_task.delay()

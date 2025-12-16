@@ -1,0 +1,82 @@
+{
+  "id": 20,
+  "started_at": "2025-12-15T08:30:11.993762+00:00",
+  "completed_at": "2025-12-16T05:25:26.663459+00:00",
+  "status": "completed",
+  "total_sources": 4,
+  "successful_sources": 3,
+  "failed_sources": 1,
+  "total_articles_collected": 1,
+  "total_articles_skipped": 74,
+  "total_articles_error": 0,
+  "duration_seconds": 75314.669697,
+  "json_report_path": null,
+  "markdown_report_path": null,
+  "jobs": [
+    {
+      "source": "Reddit - 레딧 기술",
+      "status": "completed",
+      "started_at": "2025-12-15T08:39:08.101840+00:00",
+      "completed_at": "2025-12-15T08:39:09.076146+00:00",
+      "items_collected": 0,
+      "error_message": null
+    },
+    {
+      "source": "Reddit - 레딧 인기",
+      "status": "completed",
+      "started_at": "2025-12-15T08:39:06.968100+00:00",
+      "completed_at": "2025-12-15T08:39:07.936021+00:00",
+      "items_collected": 1,
+      "error_message": null
+    },
+    {
+      "source": "Reddit - 레딧 뉴스",
+      "status": "completed",
+      "started_at": "2025-12-15T08:39:06.194968+00:00",
+      "completed_at": "2025-12-15T08:39:06.897776+00:00",
+      "items_collected": 0,
+      "error_message": null
+    },
+    {
+      "source": "DC Inside - DC Inside 실시간 베스트 갤러리",
+      "status": "completed",
+      "started_at": "2025-12-15T08:38:23.147843+00:00",
+      "completed_at": "2025-12-15T08:39:06.122393+00:00",
+      "items_collected": 50,
+      "error_message": null
+    },
+    {
+      "source": "Reddit - 레딧 기술",
+      "status": "completed",
+      "started_at": "2025-12-15T08:30:19.524749+00:00",
+      "completed_at": "2025-12-15T08:30:20.501776+00:00",
+      "items_collected": 0,
+      "error_message": null
+    },
+    {
+      "source": "Reddit - 레딧 인기",
+      "status": "completed",
+      "started_at": "2025-12-15T08:30:18.197250+00:00",
+      "completed_at": "2025-12-15T08:30:19.453005+00:00",
+      "items_collected": 1,
+      "error_message": null
+    },
+    {
+      "source": "Reddit - 레딧 뉴스",
+      "status": "completed",
+      "started_at": "2025-12-15T08:30:17.225133+00:00",
+      "completed_at": "2025-12-15T08:30:18.019640+00:00",
+      "items_collected": 0,
+      "error_message": null
+    },
+    {
+      "source": "DC Inside - DC Inside 실시간 베스트 갤러리",
+      "status": "running",
+      "started_at": "2025-12-15T08:30:12.096546+00:00",
+      "completed_at": null,
+      "items_collected": 0,
+      "error_message": null
+    }
+  ],
+  "jobs_count": 8
+}

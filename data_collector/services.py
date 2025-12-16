@@ -6,6 +6,7 @@
 """
 import logging
 import feedparser
+import time
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from urllib.parse import urlparse
@@ -16,6 +17,10 @@ from common.redis_services import (
     RealtimeStatsService
 )
 from .models import NewsSource, NewsArticle, DataCollectionJob, SocialMediaSource, SocialMediaPost
+
+# DC Inside 수집을 위한 라이브러리
+import dcapi
+from dcapi.read.title_selenium import main as selenium_title
 
 # 로거 설정
 logger = logging.getLogger(__name__)
@@ -193,9 +198,12 @@ class RSSCollectorService:
         # 수집 작업 로그 생성
         job = None
         try:
-            # 수집 작업 로그 생성
+            # 수집 작업 로그 생성 (GenericForeignKey 사용)
+            from django.contrib.contenttypes.models import ContentType
+            content_type = ContentType.objects.get_for_model(NewsSource)
             job = DataCollectionJob.objects.create(
-                source=source,
+                content_type=content_type,
+                object_id=source.id,
                 status='running',
                 started_at=timezone.now()
             )
@@ -276,7 +284,6 @@ class RSSCollectorService:
                     # 이미 수집한 기사인지 확인합니다.
                     # Redis 키 형식: "collected:news:{article_url}"
                     if self.duplicate_check.is_already_collected('news', article_url):
-                        self.logger.debug(f"이미 수집한 기사 건너뜀: {article_url}")
                         skipped_count += 1
                         continue
                     
@@ -310,9 +317,6 @@ class RSSCollectorService:
                         self.stats.increment_hourly_counter('articles_collected')
                         self.stats.record_timestamp('article_collected')
                         
-                        self.logger.debug(
-                            f"기사 수집 완료: {news_article.title[:50]}..."
-                        )
                     else:
                         # 이미 존재하는 기사 (DB에만 있고 Redis에는 없었던 경우)
                         # Redis에 표시를 남겨서 다음 수집 시 건너뛰도록 합니다.
@@ -772,11 +776,11 @@ class DCInsideCollectorService:
     DC Inside 갤러리 수집 서비스 클래스
     
     DC Inside 갤러리에서 게시글을 수집하여 데이터베이스에 저장하는 서비스입니다.
-    dcapi 패키지를 사용하여 웹 스크래핑을 수행합니다.
+    dcapi의 title_selenium을 사용하여 웹 스크래핑을 수행합니다.
     
     주요 기능:
-    1. 갤러리 글 목록 수집
-    2. 개별 게시글 상세 정보 수집
+    1. 갤러리 글 목록 수집 (dcapi.read.title_selenium)
+    2. 개별 게시글 상세 정보 수집 (dcapi.read.post)
     3. 중복 수집 방지 (URL 기반)
     4. 수집 작업 로그 기록
     
@@ -785,15 +789,15 @@ class DCInsideCollectorService:
         result = collector.collect_from_source(source_id=1)
     """
     
-    def __init__(self):
-        """DC Inside 수집 서비스 초기화"""
+    def __init__(self, headless: bool = True):
+        """
+        DC Inside 수집 서비스 초기화
+        
+        Args:
+            headless: 브라우저를 백그라운드에서 실행할지 여부 (기본값: True)
+        """
         self.logger = logging.getLogger(__name__)
-        try:
-            import dcapi
-            self.dcapi = dcapi
-        except ImportError:
-            self.logger.error("dcapi 패키지가 설치되지 않았습니다.")
-            raise ImportError("dcapi 패키지를 설치하세요: pip install git+https://github.com/Limsunoh/dcinside-read-api.git")
+        self.headless = headless
     
     def collect_from_source(
         self,
@@ -860,16 +864,65 @@ class DCInsideCollectorService:
         
         self.logger.info(f"DC Inside 수집 시작: {source.display_name} (갤러리: {gall_name})")
         
+        # 수집 작업 로그 생성 (GenericForeignKey 사용)
+        job = None
+        try:
+            from django.contrib.contenttypes.models import ContentType
+            content_type = ContentType.objects.get_for_model(SocialMediaSource)
+            job = DataCollectionJob.objects.create(
+                content_type=content_type,
+                object_id=source.id,
+                status='running',
+                started_at=timezone.now()
+            )
+        except Exception as e:
+            self.logger.warning(f"DataCollectionJob 생성 실패: {str(e)}")
+        
         items_collected = 0
         items_skipped = 0
         items_error = 0
         
         try:
-            # 1. 갤러리 글 목록 가져오기 (최근 1-3페이지)
-            title_data = self.dcapi.read.title(gall_name, start_page=1, end_page=3)
+            # 1. 갤러리 글 목록 가져오기 (dcapi.read.title_selenium 사용)
+            # 최근 1-3페이지 수집
+            self.logger.info(f"갤러리 '{gall_name}' 글 목록 수집 시작 (1-3페이지)")
             
-            if not title_data:
-                self.logger.warning(f"갤러리 '{gall_name}'에서 글 목록을 가져올 수 없습니다.")
+            try:
+                # TROUBLESHOOTING.md 예제에 따르면 위치 인자로 전달
+                # selenium_title(gall_name, start_page, end_page, headless, reuse_driver)
+                posts = selenium_title(
+                    gall_name,
+                    1,  # start_page
+                    3,  # end_page
+                    headless=self.headless,
+                    reuse_driver=True
+                )
+            except Exception as selenium_error:
+                error_msg = f"selenium_title 호출 실패: {str(selenium_error)}"
+                self.logger.error(f"갤러리 '{gall_name}' 수집 중 Selenium 오류: {error_msg}", exc_info=True)
+                if job:
+                    job.status = 'failed'
+                    job.error_message = f'Selenium 오류: {str(selenium_error)}'
+                    job.completed_at = timezone.now()
+                    job.save()
+                return {
+                    'status': 'error',
+                    'source': str(source),
+                    'error_message': f'Selenium 오류: {str(selenium_error)}',
+                    'items_collected': 0,
+                    'items_skipped': 0,
+                    'items_error': 0
+                }
+            
+            # 반환값 체크 (TROUBLESHOOTING.md 참고)
+            if not posts:
+                error_msg = f"갤러리 '{gall_name}'에서 글 목록을 가져올 수 없습니다. (빈 딕셔너리 반환)"
+                self.logger.warning(error_msg)
+                if job:
+                    job.status = 'failed'
+                    job.error_message = '글 목록을 가져올 수 없습니다.'
+                    job.completed_at = timezone.now()
+                    job.save()
                 return {
                     'status': 'error',
                     'source': str(source),
@@ -879,97 +932,158 @@ class DCInsideCollectorService:
                     'items_error': 0
                 }
             
+            # 모든 페이지의 게시글 수집
+            all_posts = []
+            for page_num, page_posts in posts.items():
+                if not page_posts:
+                    continue
+                all_posts.extend(page_posts)
+                self.logger.info(f"페이지 {page_num}에서 {len(page_posts)}개 게시글 발견")
+            
+            if not all_posts:
+                error_msg = f"갤러리 '{gall_name}'에서 수집할 글이 없습니다."
+                self.logger.warning(error_msg)
+                if job:
+                    job.status = 'failed'
+                    job.error_message = '수집할 글이 없습니다.'
+                    job.completed_at = timezone.now()
+                    job.save()
+                return {
+                    'status': 'error',
+                    'source': str(source),
+                    'error_message': '수집할 글이 없습니다.',
+                    'items_collected': 0,
+                    'items_skipped': 0,
+                    'items_error': 0
+                }
+            
+            self.logger.info(f"총 {len(all_posts)}개의 게시글을 찾았습니다.")
+            
             # 2. 각 게시글 상세 정보 수집
-            for page_num, posts in title_data.items():
-                if not posts:
+            for post_info in all_posts:
+                post_num = post_info.get('post_num')
+                if not post_num:
                     continue
                 
-                for post_info in posts:
-                    post_num = post_info.get('post_num')
-                    if not post_num:
+                try:
+                    # URL 생성
+                    post_url = f"https://gall.dcinside.com/board/view/?id={gall_name}&no={post_num}&page=1"
+                    
+                    # 중복 체크 (URL 기반)
+                    if SocialMediaPost.objects.filter(url=post_url).exists():
+                        items_skipped += 1
                         continue
                     
+                    # 게시글 상세 정보 가져오기 (dcapi.read.post 사용)
+                    post_data = dcapi.read.post(gall_name, post_num)
+                    
+                    if not post_data:
+                        items_error += 1
+                        self.logger.warning(f"게시글 {post_num} 상세 정보를 가져올 수 없습니다.")
+                        continue
+                    
+                    # published_at 파싱
+                    published_at = None
+                    if post_data.get('time'):
+                        try:
+                            # '2018-11-16 21:28:46' 형식 파싱
+                            published_at = datetime.strptime(
+                                post_data['time'],
+                                '%Y-%m-%d %H:%M:%S'
+                            )
+                            published_at = timezone.make_aware(published_at)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # 조회수 파싱
+                    view_num = 0
+                    if post_data.get('view_num'):
+                        try:
+                            view_num = int(str(post_data['view_num']).replace(',', ''))
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # 댓글 수 파싱
+                    comment_num = 0
+                    if post_data.get('comment_num'):
+                        try:
+                            comment_num = int(str(post_data['comment_num']).replace(',', ''))
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # 추천/비추천 파싱
+                    up = 0
+                    down = 0
+                    if post_data.get('up'):
+                        try:
+                            up = int(str(post_data['up']).replace(',', ''))
+                        except (ValueError, TypeError):
+                            pass
+                    if post_data.get('down'):
+                        try:
+                            down = int(str(post_data['down']).replace(',', ''))
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # 이미지 목록 가져오기
+                    images = post_data.get('images', [])
+                    if not isinstance(images, list):
+                        images = []
+                    
+                    # 썸네일 이미지 추출 (Reddit과 동일한 방식)
+                    thumbnail_url = None
+                    
+                    # 0. selenium_title에서 가져온 thumbnail 우선 사용 (가장 신뢰할 수 있는 소스)
+                    if post_info.get('thumbnail'):
+                        thumbnail_url = post_info.get('thumbnail')
+                    
+                    # 1. thumbnail_url이 없으면 images 리스트에서 추출 시도
+                    if not thumbnail_url and images and len(images) > 0:
+                        first_image = images[0]
+                        # 이미지가 문자열(URL)인 경우
+                        if isinstance(first_image, str):
+                            thumbnail_url = first_image
+                        # 이미지가 딕셔너리인 경우 URL 필드 확인
+                        elif isinstance(first_image, dict):
+                            thumbnail_url = (
+                                first_image.get('url') or
+                                first_image.get('src') or
+                                first_image.get('image_url')
+                            )
+                    
+                    # 2. thumbnail_url이 여전히 없으면 content HTML에서 <img src> 추출
+                    if not thumbnail_url:
+                        content = post_data.get('content', '')
+                        if content:
+                            import re
+                            from html import unescape
+                            
+                            # <img src="..." /> 또는 <img src='...' /> 패턴 찾기
+                            # src 속성이 따옴표 없이도 작동하도록 개선
+                            img_pattern = r'<img[^>]+src\s*=\s*["\']?([^"\'>\s]+)["\']?[^>]*>'
+                            matches = re.findall(img_pattern, content, re.IGNORECASE)
+                            
+                            if matches:
+                                # HTML 엔티티 디코딩 (&amp; -> &)
+                                decoded_matches = [unescape(url) for url in matches]
+                                
+                                # 실제 게시글 이미지 필터링 (dcimg, dccdn 도메인만)
+                                # UI 요소 이미지 제외 (nstatic, logo 등)
+                                image_domains = ['dcimg', 'dccdn', 'viewimage']
+                                filtered_matches = [
+                                    url for url in decoded_matches
+                                    if any(domain in url for domain in image_domains)
+                                    and 'nstatic' not in url
+                                    and 'logo' not in url.lower()
+                                ]
+                                
+                                if filtered_matches:
+                                    # 첫 번째 실제 이미지 URL 사용
+                                    thumbnail_url = filtered_matches[0]
+                    
+                    # 게시글 저장
                     try:
-                        # 게시글 상세 정보 가져오기
-                        post_data = self.dcapi.read.post(gall_name, post_num)
-                        
-                        if not post_data:
-                            items_error += 1
-                            continue
-                        
-                        # URL 생성
-                        post_url = f"http://gall.dcinside.com/board/view/?id={gall_name}&no={post_num}&page=1"
-                        
-                        # 중복 체크 (URL 기반)
-                        if SocialMediaPost.objects.filter(url=post_url).exists():
-                            items_skipped += 1
-                            continue
-                        
-                        # published_at 파싱
-                        published_at = None
-                        if post_data.get('time'):
-                            try:
-                                # '2018-11-16 21:28:46' 형식 파싱
-                                published_at = datetime.strptime(
-                                    post_data['time'],
-                                    '%Y-%m-%d %H:%M:%S'
-                                )
-                                published_at = timezone.make_aware(published_at)
-                            except (ValueError, TypeError):
-                                pass
-                        
-                        # 조회수 파싱
-                        view_num = 0
-                        if post_data.get('view_num'):
-                            try:
-                                view_num = int(post_data['view_num'].replace(',', ''))
-                            except (ValueError, TypeError):
-                                pass
-                        
-                        # 댓글 수 파싱
-                        comment_num = 0
-                        if post_data.get('comment_num'):
-                            try:
-                                comment_num = int(post_data['comment_num'].replace(',', ''))
-                            except (ValueError, TypeError):
-                                pass
-                        
-                        # 추천/비추천 파싱
-                        up = 0
-                        down = 0
-                        if post_data.get('up'):
-                            try:
-                                up = int(post_data['up'].replace(',', ''))
-                            except (ValueError, TypeError):
-                                pass
-                        if post_data.get('down'):
-                            try:
-                                down = int(post_data['down'].replace(',', ''))
-                            except (ValueError, TypeError):
-                                pass
-                        
-                        # 이미지 목록 가져오기
-                        images = post_data.get('images', [])
-                        
-                        # 썸네일 이미지 추출 (첫 번째 이미지를 썸네일로 사용)
-                        thumbnail_url = None
-                        if images and len(images) > 0:
-                            # images가 리스트인 경우 첫 번째 요소 사용
-                            if isinstance(images, list):
-                                first_image = images[0]
-                                # 이미지가 문자열(URL)인 경우
-                                if isinstance(first_image, str):
-                                    thumbnail_url = first_image
-                                # 이미지가 딕셔너리인 경우 URL 필드 확인
-                                elif isinstance(first_image, dict):
-                                    thumbnail_url = (
-                                        first_image.get('url') or
-                                        first_image.get('src') or
-                                        first_image.get('image_url')
-                                    )
-                        
-                        # 게시글 저장
-                        SocialMediaPost.objects.create(
+                        post_obj = SocialMediaPost.objects.create(
                             source=source,
                             platform_post_id=str(post_num),
                             url=post_url,
@@ -990,18 +1104,32 @@ class DCInsideCollectorService:
                         )
                         
                         items_collected += 1
-                        
-                    except Exception as e:
+                    except Exception as save_error:
                         self.logger.error(
-                            f"게시글 수집 오류 (갤러리: {gall_name}, 글번호: {post_num}): {str(e)}",
+                            f"게시글 저장 실패 (갤러리: {gall_name}, 글번호: {post_num}): {str(save_error)}",
                             exc_info=True
                         )
                         items_error += 1
                         continue
+                    
+                except Exception as e:
+                    self.logger.error(
+                        f"게시글 수집 오류 (갤러리: {gall_name}, 글번호: {post_num}): {str(e)}",
+                        exc_info=True
+                    )
+                    items_error += 1
+                    continue
             
             # 마지막 수집 시간 업데이트
             source.last_collected_at = timezone.now()
             source.save()
+            
+            # 작업 로그 업데이트
+            if job:
+                job.status = 'completed'
+                job.items_collected = items_collected
+                job.completed_at = timezone.now()
+                job.save()
             
             self.logger.info(
                 f"DC Inside 수집 완료: {source.display_name} "
@@ -1019,6 +1147,15 @@ class DCInsideCollectorService:
         except Exception as e:
             error_msg = f"DC Inside 수집 중 오류 발생: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
+            
+            # 작업 로그 업데이트 (실패)
+            if job:
+                job.status = 'failed'
+                job.error_message = error_msg
+                job.items_collected = items_collected
+                job.completed_at = timezone.now()
+                job.save()
+            
             return {
                 'status': 'error',
                 'source': str(source),
@@ -1127,6 +1264,20 @@ class RedditRSSCollectorService:
         subreddit = source.identifier
         
         self.logger.info(f"Reddit RSS 수집 시작: {source.display_name} (URL: {rss_url})")
+        
+        # 수집 작업 로그 생성 (GenericForeignKey 사용)
+        job = None
+        try:
+            from django.contrib.contenttypes.models import ContentType
+            content_type = ContentType.objects.get_for_model(SocialMediaSource)
+            job = DataCollectionJob.objects.create(
+                content_type=content_type,
+                object_id=source.id,
+                status='running',
+                started_at=timezone.now()
+            )
+        except Exception as e:
+            self.logger.warning(f"DataCollectionJob 생성 실패: {str(e)}")
         
         items_collected = 0
         items_skipped = 0
@@ -1263,6 +1414,13 @@ class RedditRSSCollectorService:
             source.last_collected_at = timezone.now()
             source.save()
             
+            # 작업 로그 업데이트
+            if job:
+                job.status = 'completed'
+                job.items_collected = items_collected
+                job.completed_at = timezone.now()
+                job.save()
+            
             self.logger.info(
                 f"Reddit RSS 수집 완료: {source.display_name} "
                 f"(수집: {items_collected}, 건너뜀: {items_skipped}, 오류: {items_error})"
@@ -1279,6 +1437,15 @@ class RedditRSSCollectorService:
         except Exception as e:
             error_msg = f"Reddit RSS 수집 중 오류 발생: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
+            
+            # 작업 로그 업데이트 (실패)
+            if job:
+                job.status = 'failed'
+                job.error_message = error_msg
+                job.items_collected = items_collected
+                job.completed_at = timezone.now()
+                job.save()
+            
             return {
                 'status': 'error',
                 'source': str(source),

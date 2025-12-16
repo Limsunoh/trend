@@ -205,3 +205,6 @@ zipp==3.23.0
 
 # DC Inside API
 git+https://github.com/Limsunoh/dcinside-read-api.git
+
+# WebDriver Manager (Selenium ChromeDriver 자동 관리)
+webdriver-manager
