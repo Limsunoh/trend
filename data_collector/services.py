@@ -6,7 +6,6 @@
 """
 import logging
 import feedparser
-import time
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from urllib.parse import urlparse
@@ -17,6 +16,7 @@ from common.redis_services import (
     RealtimeStatsService
 )
 from .models import NewsSource, NewsArticle, DataCollectionJob, SocialMediaSource, SocialMediaPost
+from .translation_service import translation_service
 
 # DC Inside 수집을 위한 라이브러리
 import dcapi
@@ -862,7 +862,15 @@ class DCInsideCollectorService:
         # 갤러리 이름 (identifier에서 가져오기)
         gall_name = source.identifier
         
-        self.logger.info(f"DC Inside 수집 시작: {source.display_name} (갤러리: {gall_name})")
+        # 마이너 갤러리 여부 확인 (URL에 mgallery가 포함되어 있는지 확인)
+        # 일반 갤러리: https://gall.dcinside.com/board/lists/?id=dcbest
+        # 마이너 갤러리: https://gall.dcinside.com/mgallery/board/lists/?id=centristpolitics
+        is_minor_gallery = 'mgallery' in source.url.lower() if source.url else False
+        
+        if is_minor_gallery:
+            self.logger.info(f"DC Inside 수집 시작 (마이너 갤러리): {source.display_name} (갤러리: {gall_name})")
+        else:
+            self.logger.info(f"DC Inside 수집 시작: {source.display_name} (갤러리: {gall_name})")
         
         # 수집 작업 로그 생성 (GenericForeignKey 사용)
         job = None
@@ -895,7 +903,8 @@ class DCInsideCollectorService:
                     1,  # start_page
                     3,  # end_page
                     headless=self.headless,
-                    reuse_driver=True
+                    reuse_driver=True,
+                    is_minor_gallery=is_minor_gallery  # URL 패턴으로 확인한 마이너 갤러리 여부 전달
                 )
             except Exception as selenium_error:
                 error_msg = f"selenium_title 호출 실패: {str(selenium_error)}"
@@ -966,8 +975,11 @@ class DCInsideCollectorService:
                     continue
                 
                 try:
-                    # URL 생성
-                    post_url = f"https://gall.dcinside.com/board/view/?id={gall_name}&no={post_num}&page=1"
+                    # URL 생성 (마이너 갤러리 여부에 따라 URL 다르게 생성)
+                    if is_minor_gallery:
+                        post_url = f"https://gall.dcinside.com/mgallery/board/view/?id={gall_name}&no={post_num}&page=1"
+                    else:
+                        post_url = f"https://gall.dcinside.com/board/view/?id={gall_name}&no={post_num}&page=1"
                     
                     # 중복 체크 (URL 기반)
                     if SocialMediaPost.objects.filter(url=post_url).exists():
@@ -975,7 +987,38 @@ class DCInsideCollectorService:
                         continue
                     
                     # 게시글 상세 정보 가져오기 (dcapi.read.post 사용)
-                    post_data = dcapi.read.post(gall_name, post_num)
+                    # URL 패턴으로 마이너 갤러리 여부를 미리 확인했으므로 바로 적절한 모드로 호출
+                    post_data = None
+                    try:
+                        post_data = dcapi.read.post(gall_name, post_num, is_minor_gallery=is_minor_gallery)
+                    except (IndexError, AttributeError, KeyError) as e:
+                        # 마이너 갤러리로 판단했지만 제목 파싱 실패한 경우, 일반 갤러리로 재시도
+                        if is_minor_gallery:
+                            try:
+                                post_data = dcapi.read.post(gall_name, post_num, is_minor_gallery=False)
+                            except Exception as e2:
+                                items_error += 1
+                                self.logger.warning(
+                                    f"게시글 수집 오류 (갤러리: {gall_name}, 글번호: {post_num}): {type(e2).__name__} - {str(e2)}"
+                                )
+                                continue
+                        else:
+                            # 일반 갤러리로 실패한 경우, 마이너 갤러리로 재시도
+                            try:
+                                post_data = dcapi.read.post(gall_name, post_num, is_minor_gallery=True)
+                            except Exception as e2:
+                                items_error += 1
+                                self.logger.warning(
+                                    f"게시글 수집 오류 (갤러리: {gall_name}, 글번호: {post_num}): {type(e2).__name__} - {str(e2)}"
+                                )
+                                continue
+                    except Exception as e:
+                        # 기타 예외
+                        items_error += 1
+                        self.logger.warning(
+                            f"게시글 수집 오류 (갤러리: {gall_name}, 글번호: {post_num}): {type(e).__name__} - {str(e)}"
+                        )
+                        continue
                     
                     if not post_data:
                         items_error += 1
@@ -1187,6 +1230,58 @@ class RedditRSSCollectorService:
         """Reddit RSS 수집 서비스 초기화"""
         self.logger = logging.getLogger(__name__)
     
+    def _extract_reddit_content(self, html_content: str) -> str:
+        """
+        Reddit RSS content에서 실제 게시글 내용만 추출
+        
+        Reddit RSS의 summary/description에는 다음과 같은 구조가 있습니다:
+        <!-- SC_OFF --><div class="md"><p>실제 게시글 내용</p></div><!-- SC_ON --> 메타데이터...
+        
+        이 함수는 <div class="md"> 안의 내용만 추출하고, HTML 태그는 모두 제거하여 순수 텍스트만 반환합니다.
+        
+        Args:
+            html_content: Reddit RSS에서 가져온 HTML 형식의 content
+            
+        Returns:
+            추출된 실제 게시글 내용 (순수 텍스트만, HTML 태그 제거)
+        """
+        if not html_content or not html_content.strip():
+            return html_content
+        
+        try:
+            from bs4 import BeautifulSoup
+            from html import unescape
+            
+            # HTML 엔티티 디코딩
+            html_content = unescape(html_content)
+            
+            # BeautifulSoup으로 파싱
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # <div class="md"> 찾기
+            md_div = soup.find('div', class_='md')
+            
+            if md_div:
+                # <div class="md"> 안의 텍스트만 추출 (HTML 태그 제거)
+                # get_text()로 모든 HTML 태그를 제거하고 순수 텍스트만 가져오기
+                extracted_content = md_div.get_text(separator=' ', strip=True)
+                
+                # 추출된 내용이 비어있거나 의미 없는 경우 빈 문자열 반환
+                if not extracted_content or len(extracted_content) < 3:
+                    return ''  # NULL로 저장됨
+                
+                return extracted_content
+            else:
+                # <div class="md">가 없으면 빈 문자열 반환 (NULL로 저장)
+                return ''  # NULL로 저장됨
+                
+        except Exception as e:
+            # 파싱 실패 시 빈 문자열 반환 (NULL로 저장)
+            self.logger.warning(
+                f"Reddit content 추출 중 오류: {str(e)}. 빈 문자열 반환 (NULL로 저장됨)."
+            )
+            return ''  # NULL로 저장됨
+    
     def collect_from_source(
         self,
         source: Optional[SocialMediaSource] = None,
@@ -1359,7 +1454,15 @@ class RedditRSSCollectorService:
                             pass
                     
                     # 내용 추출 (HTML 형식)
-                    content = entry.get('summary', '') or entry.get('description', '')
+                    raw_content = entry.get('summary', '') or entry.get('description', '')
+                    
+                    # Reddit RSS에서 실제 게시글 내용만 추출
+                    # <div class="md"> 안의 내용만 추출하고 나머지는 제거
+                    content = self._extract_reddit_content(raw_content)
+                    
+                    # 빈 문자열이면 None으로 변환 (DB에 NULL로 저장)
+                    if not content or not content.strip():
+                        content = None
                     
                     # 썸네일 이미지 추출
                     thumbnail_url = None
@@ -1378,13 +1481,54 @@ class RedditRSSCollectorService:
                                 entry_subreddit = tag.get('term')
                                 break
                     
-                    # 게시글 저장
+                    # 원본 제목과 내용 저장
+                    original_title = title
+                    # original_content도 content와 동일하게 처리 (HTML 제거 후 추출)
+                    original_content = self._extract_reddit_content(raw_content)
+                    
+                    # 빈 문자열이면 None으로 변환 (DB에 NULL로 저장)
+                    if not original_content or not original_content.strip():
+                        original_content = None
+                    
+                    # 번역 수행 (영어 -> 한국어)
+                    translated_title = title
+                    translated_content = content
+                    translation_failed = False
+                    
+                    try:
+                        if title and title.strip():
+                            translated_title = translation_service.translate_text(
+                                title, source_lang='en', target_lang='ko'
+                            )
+                            # 번역이 실패했는지 확인 (원본과 동일하면 번역 실패로 간주)
+                            if translated_title == title:
+                                translation_failed = True
+                        
+                        if content and content.strip():
+                            translated_content = translation_service.translate_text(
+                                content, source_lang='en', target_lang='ko'
+                            )
+                            # 번역이 실패했는지 확인
+                            if translated_content == content:
+                                translation_failed = True
+                    except Exception as trans_error:
+                        # 번역 실패 시 원본 사용, 에러 로깅
+                        translation_failed = True
+                        self.logger.error(
+                            f"[Reddit] 번역 중 예외 발생 (URL: {post_url[:100]}...): {str(trans_error)}. "
+                            f"원본 텍스트를 사용합니다.",
+                            exc_info=True
+                        )
+                    
+                    # 게시글 저장 (번역된 제목/내용과 원본 모두 저장)
                     SocialMediaPost.objects.create(
                         source=source,
                         platform_post_id=post_id,
                         url=post_url,
-                        title=title,
-                        content=content,
+                        title=translated_title,  # 번역된 제목
+                        content=translated_content,  # 번역된 내용
+                        original_title=original_title,  # 원본 제목
+                        original_content=original_content,  # 원본 내용
                         author=author,
                         published_at=published_at,
                         subreddit=entry_subreddit,
@@ -1392,11 +1536,11 @@ class RedditRSSCollectorService:
                         raw_data={
                             'id': post_id,
                             'link': post_url,
-                            'title': title,
+                            'title': original_title,
                             'author': entry.get('author', ''),
                             'published': entry.get('published', ''),
                             'updated': entry.get('updated', ''),
-                            'summary': content,
+                            'summary': original_content,
                         }
                     )
                     

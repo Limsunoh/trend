@@ -376,6 +376,23 @@ class SocialMediaPost(models.Model):
         help_text='게시물의 본문 내용'
     )
     
+    # 원본 제목 (번역 전 원본 저장용 - 주로 Reddit용)
+    original_title = models.CharField(
+        max_length=500,
+        blank=True,
+        null=True,
+        verbose_name='원본 제목',
+        help_text='번역 전 원본 제목 (title이 번역된 경우 저장)'
+    )
+    
+    # 원본 내용 (번역 전 원본 저장용 - 주로 Reddit용)
+    original_content = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name='원본 내용',
+        help_text='번역 전 원본 내용 (content가 번역된 경우 저장)'
+    )
+    
     # 작성자/사용자명
     author = models.CharField(
         max_length=200,
@@ -443,33 +460,6 @@ class SocialMediaPost(models.Model):
         verbose_name='서브레딧',
         help_text='Reddit 서브레딧 이름',
         db_index=True
-    )
-    
-    # 업보트 수 (Reddit)
-    upvotes = models.IntegerField(
-        default=0,
-        null=True,
-        blank=True,
-        verbose_name='업보트',
-        help_text='Reddit 업보트 수'
-    )
-    
-    # 다운보트 수 (Reddit)
-    downvotes = models.IntegerField(
-        default=0,
-        null=True,
-        blank=True,
-        verbose_name='다운보트',
-        help_text='Reddit 다운보트 수'
-    )
-    
-    # 스코어 (Reddit)
-    score = models.IntegerField(
-        default=0,
-        null=True,
-        blank=True,
-        verbose_name='스코어',
-        help_text='Reddit 스코어 (업보트 - 다운보트)'
     )
     
     # ===== 공통 미디어 필드 =====
