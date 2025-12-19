@@ -90,6 +90,7 @@ langchain-community==0.0.10
 langchain-core==0.1.23
 langsmith==0.0.87
 librt==0.6.3
+deep-translator
 lxml==6.0.2
 markdown-it-py==4.0.0
 MarkupSafe==3.0.3
