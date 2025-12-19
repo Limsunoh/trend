@@ -815,10 +815,11 @@ class RedditPostSerializer(BaseSocialMediaPostSerializer):
         fields = [
             'id', 'source', 'source_detail', 'source_name', 'platform',
             'platform_post_id', 'url', 'title', 'title_short', 'content',
+            'original_title', 'original_content',  # Reddit 전용: 원본 제목/내용
             'author', 'published_at', 'published_at_display',
             'collected_at', 'collected_at_display',
             'likes_count', 'comments_count', 'shares_count', 'views_count',
-            'subreddit', 'upvotes', 'downvotes', 'score',
+            'subreddit',
             'thumbnail_url',
             'raw_data', 'is_processed'
         ]
@@ -838,15 +839,6 @@ class RedditPostSerializer(BaseSocialMediaPostSerializer):
             },
             'subreddit': {
                 'help_text': 'Reddit 서브레딧 이름',
-            },
-            'upvotes': {
-                'help_text': 'Reddit 업보트 수',
-            },
-            'downvotes': {
-                'help_text': 'Reddit 다운보트 수',
-            },
-            'score': {
-                'help_text': 'Reddit 스코어 (업보트 - 다운보트)',
             },
         }
     
