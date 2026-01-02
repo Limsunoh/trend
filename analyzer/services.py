@@ -772,3 +772,402 @@ def compare_platforms(
         'summary': summary
     }
 
+
+def get_keyword_occurrence_times(
+    keyword: str,
+    platform: str,  # 'news' or 'sns'
+    days: int = 7,
+    queryset=None
+) -> Dict[str, Optional]:
+    """
+    특정 키워드가 특정 플랫폼에서 등장한 시간 정보를 추출합니다.
+    
+    Args:
+        keyword: 찾을 키워드
+        platform: 'news' 또는 'sns'
+        days: 최근 며칠간의 데이터를 검색할지
+        queryset: 특정 QuerySet 사용 (None이면 자동 조회)
+        
+    Returns:
+        {
+            'first_occurrence': 최초 등장 시간 (datetime 또는 None),
+            'last_occurrence': 최종 등장 시간 (datetime 또는 None),
+            'occurrence_count': 등장 횟수,
+            'all_times': 등장한 모든 시간 리스트 (선택적)
+        }
+    """
+    from data_collector.models import NewsArticle, SocialMediaPost
+    
+    if platform == 'news':
+        Model = NewsArticle
+        text_extractor = extract_text_from_news_article
+    elif platform == 'sns':
+        Model = SocialMediaPost
+        text_extractor = extract_text_from_sns_post
+    else:
+        raise ValueError("platform은 'news' 또는 'sns'여야 합니다.")
+    
+    # QuerySet 준비
+    if queryset is None:
+        start_date = timezone.now() - timedelta(days=days)
+        queryset = Model.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True).order_by('published_at')
+    else:
+        queryset = queryset.exclude(published_at__isnull=True).order_by('published_at')
+    
+    # 분석기 가져오기
+    analyzer = get_analyzer()
+    
+    # 키워드가 포함된 항목 찾기
+    occurrence_times = []
+    
+    for item in queryset:
+        text = text_extractor(item)
+        if not text:
+            continue
+        
+        # 키워드 추출
+        keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+        
+        # 키워드가 포함되어 있는지 확인
+        if keyword in keywords:
+            if item.published_at:
+                occurrence_times.append(item.published_at)
+    
+    if not occurrence_times:
+        return {
+            'first_occurrence': None,
+            'last_occurrence': None,
+            'occurrence_count': 0,
+            'all_times': []
+        }
+    
+    occurrence_times.sort()  # 시간순 정렬
+    
+    return {
+        'first_occurrence': occurrence_times[0],
+        'last_occurrence': occurrence_times[-1],
+        'occurrence_count': len(occurrence_times),
+        'all_times': occurrence_times
+    }
+
+
+def analyze_time_lag(
+    keywords: Optional[List[str]] = None,
+    days: int = 7,
+    min_frequency: float = 0.001,
+    top_n: Optional[int] = None,
+    news_queryset=None,
+    sns_queryset=None
+) -> Dict[str, any]:
+    """
+    뉴스와 SNS 간의 키워드 전파 패턴을 분석합니다 (시간차 분석).
+    
+    각 키워드에 대해:
+    1. 뉴스와 SNS에서 최초 등장 시간을 찾습니다
+    2. 시간차를 계산합니다
+    3. 전파 방향을 판단합니다 (뉴스 → SNS 또는 SNS → 뉴스)
+    4. 통계를 집계합니다
+    
+    Args:
+        keywords: 분석할 키워드 리스트 (None이면 compare_platforms로 공통 키워드 추출)
+        days: 최근 며칠간의 데이터를 분석할지
+        min_frequency: 최소 상대 빈도 (키워드 추출 시 사용)
+        top_n: 상위 N개 키워드만 분석 (None이면 전체)
+        news_queryset: 뉴스 QuerySet (선택적)
+        sns_queryset: SNS QuerySet (선택적)
+        
+    Returns:
+        {
+            'keywords': 키워드별 분석 결과 리스트,
+            'statistics': 통계 정보,
+            'timeline_data': 타임라인 시각화용 데이터 (선택적)
+        }
+    """
+    # 키워드 리스트 준비
+    if keywords is None:
+        # compare_platforms로 공통 키워드 추출
+        comparison_result = compare_platforms(
+            news_queryset=news_queryset,
+            sns_queryset=sns_queryset,
+            days=days,
+            min_frequency=min_frequency,
+            top_n=top_n
+        )
+        keywords = [item['keyword'] for item in comparison_result['common_keywords']]
+    
+    if not keywords:
+        logger.warning("분석할 키워드가 없습니다.")
+        return {
+            'keywords': [],
+            'statistics': {
+                'total_keywords': 0,
+                'news_to_sns': 0,
+                'sns_to_news': 0,
+                'simultaneous': 0,
+                'news_only': 0,
+                'sns_only': 0,
+                'avg_time_lag_news_to_sns': None,
+                'avg_time_lag_sns_to_news': None
+            }
+        }
+    
+    # 각 키워드에 대해 시간차 분석
+    keyword_results = []
+    news_to_sns_lags = []  # 뉴스 → SNS 전파 시간차
+    sns_to_news_lags = []  # SNS → 뉴스 전파 시간차
+    
+    for keyword in keywords:
+        # 뉴스에서 등장 시간 추출
+        news_times = get_keyword_occurrence_times(
+            keyword, 'news', days, news_queryset
+        )
+        news_first = news_times['first_occurrence']
+        
+        # SNS에서 등장 시간 추출
+        sns_times = get_keyword_occurrence_times(
+            keyword, 'sns', days, sns_queryset
+        )
+        sns_first = sns_times['first_occurrence']
+        
+        # 시간차 계산
+        result = {
+            'keyword': keyword,
+            'news_first_occurrence': news_first,
+            'sns_first_occurrence': sns_first,
+            'news_occurrence_count': news_times['occurrence_count'],
+            'sns_occurrence_count': sns_times['occurrence_count'],
+            'direction': None,
+            'time_lag_hours': None,
+            'time_lag_timedelta': None
+        }
+        
+        if news_first and sns_first:
+            # 두 플랫폼 모두에서 등장
+            if news_first < sns_first:
+                # 뉴스가 먼저
+                time_lag = sns_first - news_first
+                result['direction'] = 'news_to_sns'
+                result['time_lag_timedelta'] = time_lag
+                result['time_lag_hours'] = time_lag.total_seconds() / 3600
+                news_to_sns_lags.append(time_lag.total_seconds() / 3600)
+            elif sns_first < news_first:
+                # SNS가 먼저
+                time_lag = news_first - sns_first
+                result['direction'] = 'sns_to_news'
+                result['time_lag_timedelta'] = time_lag
+                result['time_lag_hours'] = time_lag.total_seconds() / 3600
+                sns_to_news_lags.append(time_lag.total_seconds() / 3600)
+            else:
+                # 동시 등장 (거의 불가능하지만)
+                result['direction'] = 'simultaneous'
+                result['time_lag_hours'] = 0
+        elif news_first and not sns_first:
+            result['direction'] = 'news_only'
+        elif sns_first and not news_first:
+            result['direction'] = 'sns_only'
+        else:
+            result['direction'] = 'not_found'
+        
+        keyword_results.append(result)
+    
+    # 통계 집계
+    news_to_sns_count = sum(1 for r in keyword_results if r['direction'] == 'news_to_sns')
+    sns_to_news_count = sum(1 for r in keyword_results if r['direction'] == 'sns_to_news')
+    simultaneous_count = sum(1 for r in keyword_results if r['direction'] == 'simultaneous')
+    news_only_count = sum(1 for r in keyword_results if r['direction'] == 'news_only')
+    sns_only_count = sum(1 for r in keyword_results if r['direction'] == 'sns_only')
+    
+    # 평균 시간차 계산
+    avg_news_to_sns = sum(news_to_sns_lags) / len(news_to_sns_lags) if news_to_sns_lags else None
+    avg_sns_to_news = sum(sns_to_news_lags) / len(sns_to_news_lags) if sns_to_news_lags else None
+    
+    statistics = {
+        'total_keywords': len(keyword_results),
+        'news_to_sns': news_to_sns_count,
+        'sns_to_news': sns_to_news_count,
+        'simultaneous': simultaneous_count,
+        'news_only': news_only_count,
+        'sns_only': sns_only_count,
+        'avg_time_lag_news_to_sns_hours': avg_news_to_sns,
+        'avg_time_lag_sns_to_news_hours': avg_sns_to_news,
+        'news_to_sns_percentage': (news_to_sns_count / len(keyword_results) * 100) if keyword_results else 0,
+        'sns_to_news_percentage': (sns_to_news_count / len(keyword_results) * 100) if keyword_results else 0
+    }
+    
+    logger.info(
+        f"시간차 분석 완료: {len(keyword_results)}개 키워드, "
+        f"뉴스→SNS {news_to_sns_count}개, SNS→뉴스 {sns_to_news_count}개"
+    )
+    
+    return {
+        'keywords': keyword_results,
+        'statistics': statistics
+    }
+
+
+def get_multiple_keywords_timeline(
+    keywords: List[str],
+    days: int = 7,
+    interval_hours: int = 6,
+    news_queryset=None,
+    sns_queryset=None
+) -> Dict[str, any]:
+    """
+    여러 키워드의 타임라인 데이터를 한 번에 생성합니다.
+    
+    Args:
+        keywords: 분석할 키워드 리스트
+        days: 최근 며칠간의 데이터를 분석할지
+        interval_hours: 시간대별 집계 간격 (시간 단위)
+        news_queryset: 뉴스 QuerySet (선택적)
+        sns_queryset: SNS QuerySet (선택적)
+        
+    Returns:
+        {
+            'timelines': 키워드별 타임라인 데이터 딕셔너리,
+            'common_time_labels': 공통 시간 레이블 리스트
+        }
+    """
+    timelines = {}
+    all_time_labels = set()
+    
+    for keyword in keywords:
+        timeline_data = get_keyword_timeline(
+            keyword, days, interval_hours, news_queryset, sns_queryset
+        )
+        timelines[keyword] = timeline_data
+        all_time_labels.update(timeline_data['time_labels'])
+    
+    # 모든 시간 레이블 정렬
+    common_time_labels = sorted(list(all_time_labels))
+    
+    return {
+        'timelines': timelines,
+        'common_time_labels': common_time_labels
+    }
+
+
+def get_keyword_timeline(
+    keyword: str,
+    days: int = 7,
+    interval_hours: int = 6,  # 6시간 단위로 집계
+    news_queryset=None,
+    sns_queryset=None
+) -> Dict[str, any]:
+    """
+    키워드의 시간대별 등장 빈도를 계산하여 타임라인 데이터를 생성합니다.
+    
+    시각화(그래프)에 사용할 수 있는 데이터를 반환합니다.
+    
+    Args:
+        keyword: 분석할 키워드
+        days: 최근 며칠간의 데이터를 분석할지
+        interval_hours: 시간대별 집계 간격 (시간 단위)
+        news_queryset: 뉴스 QuerySet (선택적)
+        sns_queryset: SNS QuerySet (선택적)
+        
+    Returns:
+        {
+            'keyword': 키워드,
+            'news_timeline': 뉴스 시간대별 등장 횟수 리스트,
+            'sns_timeline': SNS 시간대별 등장 횟수 리스트,
+            'time_labels': 시간대 레이블 리스트,
+            'news_first_occurrence': 뉴스 최초 등장 시간,
+            'sns_first_occurrence': SNS 최초 등장 시간
+        }
+    """
+    from data_collector.models import NewsArticle, SocialMediaPost
+    from collections import defaultdict
+    
+    # QuerySet 준비
+    start_date = timezone.now() - timedelta(days=days)
+    
+    if news_queryset is None:
+        news_queryset = NewsArticle.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True)
+    
+    if sns_queryset is None:
+        sns_queryset = SocialMediaPost.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True)
+    
+    # 분석기 가져오기
+    analyzer = get_analyzer()
+    
+    # 시간대별 집계를 위한 딕셔너리
+    news_buckets = defaultdict(int)
+    sns_buckets = defaultdict(int)
+    
+    news_first = None
+    sns_first = None
+    
+    # 뉴스 처리
+    for article in news_queryset:
+        text = extract_text_from_news_article(article)
+        if not text:
+            continue
+        
+        keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+        
+        if keyword in keywords and article.published_at:
+            # 시간대 버킷 계산 (interval_hours 단위)
+            bucket_key = article.published_at.replace(
+                minute=0, second=0, microsecond=0
+            )
+            # interval_hours 단위로 반올림
+            hours_offset = bucket_key.hour % interval_hours
+            bucket_key = bucket_key - timedelta(hours=hours_offset)
+            
+            news_buckets[bucket_key] += 1
+            
+            # 최초 등장 시간 기록
+            if news_first is None or article.published_at < news_first:
+                news_first = article.published_at
+    
+    # SNS 처리
+    for post in sns_queryset:
+        text = extract_text_from_sns_post(post)
+        if not text:
+            continue
+        
+        keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+        
+        if keyword in keywords and post.published_at:
+            # 시간대 버킷 계산
+            bucket_key = post.published_at.replace(
+                minute=0, second=0, microsecond=0
+            )
+            hours_offset = bucket_key.hour % interval_hours
+            bucket_key = bucket_key - timedelta(hours=hours_offset)
+            
+            sns_buckets[bucket_key] += 1
+            
+            # 최초 등장 시간 기록
+            if sns_first is None or post.published_at < sns_first:
+                sns_first = post.published_at
+    
+    # 모든 시간대 버킷 합치기
+    all_buckets = set(news_buckets.keys()) | set(sns_buckets.keys())
+    all_buckets = sorted(all_buckets)
+    
+    # 타임라인 데이터 생성
+    news_timeline = [news_buckets.get(bucket, 0) for bucket in all_buckets]
+    sns_timeline = [sns_buckets.get(bucket, 0) for bucket in all_buckets]
+    
+    # 시간 레이블 생성 (문자열 형식)
+    time_labels = [bucket.strftime('%Y-%m-%d %H:%M') for bucket in all_buckets]
+    
+    return {
+        'keyword': keyword,
+        'news_timeline': news_timeline,
+        'sns_timeline': sns_timeline,
+        'time_labels': time_labels,
+        'time_buckets': [bucket.isoformat() for bucket in all_buckets],  # ISO 형식
+        'news_first_occurrence': news_first.isoformat() if news_first else None,
+        'sns_first_occurrence': sns_first.isoformat() if sns_first else None,
+        'interval_hours': interval_hours
+    }
+
