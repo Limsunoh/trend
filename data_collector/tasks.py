@@ -11,8 +11,10 @@
 """
 import logging
 from typing import Optional
-from celery import shared_task
+from datetime import timedelta
+from celery import shared_task, current_app
 from django.utils import timezone
+from django.contrib.contenttypes.models import ContentType
 from .services import (
     RSSCollectorService,
     DCInsideCollectorService,
@@ -232,9 +234,6 @@ def check_session_completion(session_id: int):
     모든 작업이 완료되었는지 확인하고, 완료되면 리포트를 생성합니다.
     News와 Social Media 세션 모두 지원합니다.
     """
-    from datetime import timedelta
-    from django.contrib.contenttypes.models import ContentType
-    
     try:
         session = CollectionSession.objects.get(id=session_id)
     except CollectionSession.DoesNotExist:
@@ -299,7 +298,6 @@ def check_session_completion(session_id: int):
             
             # 세션 완료 시 이미 예약된 check_session_completion 태스크 취소
             try:
-                from celery import current_app
                 celery_app = current_app
                 inspect = celery_app.control.inspect()
                 scheduled = inspect.scheduled() or {}

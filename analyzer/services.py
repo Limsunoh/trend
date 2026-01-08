@@ -1,23 +1,13 @@
-"""
-형태소 분석 서비스 모듈
-
-PyKOMORAN을 사용한 한국어 형태소 분석 기능을 제공합니다.
-"""
 import logging
 import os
-from typing import List, Dict, Optional, Tuple
-from collections import Counter
+from typing import List, Dict, Optional, Tuple, Any
+from collections import Counter, defaultdict
 from datetime import timedelta
 from django.utils import timezone
+from data_collector.models import NewsArticle, SocialMediaPost
+from PyKomoran import Komoran
 
 logger = logging.getLogger(__name__)
-
-try:
-    from PyKomoran import Komoran
-    PYKOMORAN_AVAILABLE = True
-except ImportError:
-    PYKOMORAN_AVAILABLE = False
-    logger.warning("PyKomoran이 설치되지 않았습니다. pip install PyKomoran을 실행하세요.")
 
 # 불용어 리스트 캐시 (한 번만 로드)
 _STOPWORDS_CACHE: Optional[set] = None
@@ -43,12 +33,6 @@ class MorphologicalAnalyzer:
                 - Java가 PATH에 없을 때만 지정
                 - 예: "C:\\Program Files\\Java\\jdk-11\\bin\\java.exe"
         """
-        if not PYKOMORAN_AVAILABLE:
-            raise ImportError(
-                "PyKomoran이 설치되지 않았습니다. "
-                "다음 명령어로 설치하세요: pip install PyKomoran"
-            )
-        
         # Java 경로 설정 (필요한 경우)
         if java_path and os.path.exists(java_path):
             os.environ['JAVA_HOME'] = os.path.dirname(os.path.dirname(java_path))
@@ -219,20 +203,8 @@ class MorphologicalAnalyzer:
         return stopwords
     
     def _get_default_stopwords(self) -> set:
-        """
-        기본 불용어 리스트 (파일이 없을 때 사용)
-        
-        Returns:
-            기본 불용어 집합
-        """
-        return {
-            '것', '수', '등', '때', '곳', '년', '월', '일', '시', '분',
-            '이', '가', '을', '를', '의', '에', '와', '과', '도', '로',
-            '것이', '것을', '것에', '것으로', '것도',
-            '그', '그것', '그런', '그렇게',
-            '이것', '저것', '이런', '저런',
-            '때문', '위해', '통해', '대해',
-        }
+        """기본 불용어 리스트 반환 (현재는 빈 집합)"""
+        return set()
     
     def _remove_stopwords(self, words: List[str]) -> List[str]:
         """
@@ -338,18 +310,6 @@ class MorphologicalAnalyzer:
 _analyzer_instance: Optional[MorphologicalAnalyzer] = None
 
 
-def clear_stopwords_cache():
-    """
-    불용어 캐시 초기화
-    
-    파일을 수정한 후 즉시 반영하고 싶을 때 사용합니다.
-    """
-    global _STOPWORDS_CACHE, _STOPWORDS_FILE_MTIME
-    _STOPWORDS_CACHE = None
-    _STOPWORDS_FILE_MTIME = None
-    logger.info("불용어 캐시가 초기화되었습니다.")
-
-
 def get_analyzer(model_type: str = "STABLE", java_path: Optional[str] = None) -> MorphologicalAnalyzer:
     """
     형태소 분석기 싱글톤 인스턴스 반환
@@ -373,9 +333,6 @@ def get_analyzer(model_type: str = "STABLE", java_path: Optional[str] = None) ->
     return _analyzer_instance
 
 
-# ============================================================================
-# DB 데이터 분석 함수들
-# ============================================================================
 
 def extract_text_from_news_article(article) -> str:
     """
@@ -448,15 +405,12 @@ def analyze_news_articles(
         result = analyze_news_articles(days=7)
         
         # 특정 queryset 분석
-        from data_collector.models import NewsArticle
         articles = NewsArticle.objects.filter(category='정치')
         result = analyze_news_articles(queryset=articles)
         
         # 상위 10개 키워드만
         result = analyze_news_articles(days=7, top_n=10)
     """
-    from data_collector.models import NewsArticle
-    
     # QuerySet 준비
     if queryset is None:
         start_date = timezone.now() - timedelta(days=days)
@@ -558,12 +512,9 @@ def analyze_sns_posts(
         result = analyze_sns_posts(days=7)
         
         # 특정 플랫폼만 분석
-        from data_collector.models import SocialMediaPost
         posts = SocialMediaPost.objects.filter(source__platform='reddit')
         result = analyze_sns_posts(queryset=posts)
     """
-    from data_collector.models import SocialMediaPost
-    
     # QuerySet 준비
     if queryset is None:
         start_date = timezone.now() - timedelta(days=days)
@@ -778,7 +729,7 @@ def get_keyword_occurrence_times(
     platform: str,  # 'news' or 'sns'
     days: int = 7,
     queryset=None
-) -> Dict[str, Optional]:
+) -> Dict[str, Any]:
     """
     특정 키워드가 특정 플랫폼에서 등장한 시간 정보를 추출합니다.
     
@@ -796,8 +747,6 @@ def get_keyword_occurrence_times(
             'all_times': 등장한 모든 시간 리스트 (선택적)
         }
     """
-    from data_collector.models import NewsArticle, SocialMediaPost
-    
     if platform == 'news':
         Model = NewsArticle
         text_extractor = extract_text_from_news_article
@@ -913,31 +862,70 @@ def analyze_time_lag(
             }
         }
     
-    # 각 키워드에 대해 시간차 분석
+    # QuerySet 준비
+    if news_queryset is None:
+        start_date = timezone.now() - timedelta(days=days)
+        news_queryset = NewsArticle.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True).order_by('published_at')
+    
+    if sns_queryset is None:
+        start_date = timezone.now() - timedelta(days=days)
+        sns_queryset = SocialMediaPost.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True).order_by('published_at')
+    
+    # 분석기 가져오기
+    analyzer = get_analyzer()
+    
+    logger.info(f"뉴스 기사 형태소 분석 시작: {news_queryset.count()}개")
+    news_keywords_map = {}
+    for article in news_queryset:
+        text = extract_text_from_news_article(article)
+        if text:
+            keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+            news_keywords_map[article.id] = keywords
+    
+    logger.info(f"SNS 게시물 형태소 분석 시작: {sns_queryset.count()}개")
+    sns_keywords_map = {}
+    for post in sns_queryset:
+        text = extract_text_from_sns_post(post)
+        if text:
+            keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+            sns_keywords_map[post.id] = keywords
+    
+    logger.info("형태소 분석 완료. 키워드별 등장 시간 계산 시작")
+    
     keyword_results = []
-    news_to_sns_lags = []  # 뉴스 → SNS 전파 시간차
-    sns_to_news_lags = []  # SNS → 뉴스 전파 시간차
+    news_to_sns_lags = []
+    sns_to_news_lags = []
     
     for keyword in keywords:
-        # 뉴스에서 등장 시간 추출
-        news_times = get_keyword_occurrence_times(
-            keyword, 'news', days, news_queryset
-        )
-        news_first = news_times['first_occurrence']
+        # 뉴스에서 등장한 게시물 찾기
+        news_occurrences = []
+        for article in news_queryset:
+            if article.id in news_keywords_map and keyword in news_keywords_map[article.id]:
+                if article.published_at:
+                    news_occurrences.append(article.published_at)
         
-        # SNS에서 등장 시간 추출
-        sns_times = get_keyword_occurrence_times(
-            keyword, 'sns', days, sns_queryset
-        )
-        sns_first = sns_times['first_occurrence']
+        # SNS에서 등장한 게시물 찾기
+        sns_occurrences = []
+        for post in sns_queryset:
+            if post.id in sns_keywords_map and keyword in sns_keywords_map[post.id]:
+                if post.published_at:
+                    sns_occurrences.append(post.published_at)
+        
+        # 최초/최종 등장 시간 계산
+        news_first = min(news_occurrences) if news_occurrences else None
+        sns_first = min(sns_occurrences) if sns_occurrences else None
         
         # 시간차 계산
         result = {
             'keyword': keyword,
             'news_first_occurrence': news_first,
             'sns_first_occurrence': sns_first,
-            'news_occurrence_count': news_times['occurrence_count'],
-            'sns_occurrence_count': sns_times['occurrence_count'],
+            'news_occurrence_count': len(news_occurrences),
+            'sns_occurrence_count': len(sns_occurrences),
             'direction': None,
             'time_lag_hours': None,
             'time_lag_timedelta': None
@@ -1078,9 +1066,6 @@ def get_keyword_timeline(
             'sns_first_occurrence': SNS 최초 등장 시간
         }
     """
-    from data_collector.models import NewsArticle, SocialMediaPost
-    from collections import defaultdict
-    
     # QuerySet 준비
     start_date = timezone.now() - timedelta(days=days)
     
@@ -1113,17 +1098,14 @@ def get_keyword_timeline(
         keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
         
         if keyword in keywords and article.published_at:
-            # 시간대 버킷 계산 (interval_hours 단위)
             bucket_key = article.published_at.replace(
                 minute=0, second=0, microsecond=0
             )
-            # interval_hours 단위로 반올림
             hours_offset = bucket_key.hour % interval_hours
             bucket_key = bucket_key - timedelta(hours=hours_offset)
             
             news_buckets[bucket_key] += 1
             
-            # 최초 등장 시간 기록
             if news_first is None or article.published_at < news_first:
                 news_first = article.published_at
     
@@ -1136,7 +1118,6 @@ def get_keyword_timeline(
         keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
         
         if keyword in keywords and post.published_at:
-            # 시간대 버킷 계산
             bucket_key = post.published_at.replace(
                 minute=0, second=0, microsecond=0
             )
@@ -1145,7 +1126,6 @@ def get_keyword_timeline(
             
             sns_buckets[bucket_key] += 1
             
-            # 최초 등장 시간 기록
             if sns_first is None or post.published_at < sns_first:
                 sns_first = post.published_at
     

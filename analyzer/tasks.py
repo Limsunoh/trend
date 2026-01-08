@@ -36,7 +36,6 @@ def analyze_keywords_task(days: int = 7, top_n: int = 50):
         
     사용 예시:
         # Celery로 비동기 실행
-        from analyzer.tasks import analyze_keywords_task
         result = analyze_keywords_task.delay(days=7, top_n=50)
         
         # 동기 실행 (테스트용)
@@ -93,7 +92,6 @@ def compare_platforms_task(days: int = 7, top_n: int = 30, min_frequency: float 
         
     사용 예시:
         # Celery로 비동기 실행
-        from analyzer.tasks import compare_platforms_task
         result = compare_platforms_task.delay(days=7, top_n=30)
     """
     try:

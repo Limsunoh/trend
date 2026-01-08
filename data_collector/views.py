@@ -11,6 +11,7 @@ from django.db.models import QuerySet
 from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.utils import timezone
+from urllib.parse import unquote
 import requests
 from datetime import timedelta
 from .models import (
@@ -274,8 +275,6 @@ class ThumbnailProxyView(APIView):
             )
         
         try:
-            from urllib.parse import unquote
-            
             # URL 디코딩
             image_url = unquote(image_url)
             
@@ -418,10 +417,6 @@ class NewsArticleCollectionViewSet(viewsets.ViewSet):
         모든 활성화된 뉴스 소스에서 수집 작업 시작
         중복 실행 방지: 최근 5분 이내에 실행 중인 세션이 있으면 새로 시작하지 않습니다.
         """
-        from datetime import timedelta
-        from django.utils import timezone
-        from .models import CollectionSession
-        
         # 중복 실행 방지: 최근 5분 이내에 실행 중인 News 세션이 있는지 확인
         recent_time = timezone.now() - timedelta(minutes=5)
         running_sessions = CollectionSession.objects.filter(
