@@ -21,6 +21,7 @@ from analyzer.services import (
     get_multiple_keywords_timeline
 )
 from datetime import timedelta
+import time
 
 
 class Command(BaseCommand):
@@ -84,20 +85,34 @@ class Command(BaseCommand):
         
         # 특정 키워드 타임라인 분석
         if keyword:
+            start_time = time.time()
             self._analyze_keyword_timeline(keyword, days, interval_hours)
+            elapsed_time = time.time() - start_time
+            self.stdout.write(
+                f"\n⏱️  총 실행 시간: {elapsed_time:.2f}초 ({elapsed_time/60:.2f}분)"
+            )
             return
         
         # 시간차 분석 실행
         try:
+            start_time = time.time()
             result = analyze_time_lag(
                 keywords=None,  # 공통 키워드 자동 추출
                 days=days,
                 min_frequency=min_frequency,
                 top_n=top_n
             )
+            total_elapsed = time.time() - start_time
             
             keywords = result['keywords']
             statistics = result['statistics']
+            
+            # 실행 시간 출력
+            self.stdout.write("\n[실행 시간]")
+            self.stdout.write("-" * 80)
+            self.stdout.write(
+                f"⏱️  총 실행 시간: {total_elapsed:.2f}초 ({total_elapsed/60:.2f}분)"
+            )
             
             # 통계 출력
             self.stdout.write("\n[시간차 분석 통계]")
@@ -213,8 +228,14 @@ class Command(BaseCommand):
         self.stdout.write("-" * 80)
         
         try:
+            start_time = time.time()
             timeline_data = get_keyword_timeline(
                 keyword, days, interval_hours
+            )
+            elapsed_time = time.time() - start_time
+            
+            self.stdout.write(
+                f"⏱️  타임라인 생성 시간: {elapsed_time:.2f}초 ({elapsed_time/60:.2f}분)"
             )
             
             self.stdout.write(

@@ -1005,6 +1005,8 @@ def get_multiple_keywords_timeline(
     """
     여러 키워드의 타임라인 데이터를 한 번에 생성합니다.
     
+    최적화: 모든 게시물을 한 번만 형태소 분석하고, 각 키워드에 대해 재사용합니다.
+    
     Args:
         keywords: 분석할 키워드 리스트
         days: 최근 며칠간의 데이터를 분석할지
@@ -1018,15 +1020,104 @@ def get_multiple_keywords_timeline(
             'common_time_labels': 공통 시간 레이블 리스트
         }
     """
+    # QuerySet 준비
+    start_date = timezone.now() - timedelta(days=days)
+    
+    if news_queryset is None:
+        news_queryset = NewsArticle.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True)
+    
+    if sns_queryset is None:
+        sns_queryset = SocialMediaPost.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True)
+    
+    # 최적화: 모든 게시물을 한 번만 형태소 분석하고 결과 재사용
+    analyzer = get_analyzer()
+    
+    logger.info(f"뉴스 기사 형태소 분석 시작: {news_queryset.count()}개")
+    news_keywords_map = {}
+    for article in news_queryset:
+        text = extract_text_from_news_article(article)
+        if text:
+            keywords_extracted = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+            news_keywords_map[article.id] = keywords_extracted
+    
+    logger.info(f"SNS 게시물 형태소 분석 시작: {sns_queryset.count()}개")
+    sns_keywords_map = {}
+    for post in sns_queryset:
+        text = extract_text_from_sns_post(post)
+        if text:
+            keywords_extracted = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+            sns_keywords_map[post.id] = keywords_extracted
+    
+    logger.info(f"형태소 분석 완료. {len(keywords)}개 키워드 타임라인 생성 시작")
+    
     timelines = {}
     all_time_labels = set()
     
+    # 각 키워드에 대해 타임라인 생성 (형태소 분석 결과 재사용)
     for keyword in keywords:
-        timeline_data = get_keyword_timeline(
-            keyword, days, interval_hours, news_queryset, sns_queryset
-        )
+        news_buckets = defaultdict(int)
+        sns_buckets = defaultdict(int)
+        news_first = None
+        sns_first = None
+        
+        # 뉴스 처리 (메모리에서 키워드 검색)
+        for article in news_queryset:
+            if article.id in news_keywords_map and keyword in news_keywords_map[article.id]:
+                if article.published_at:
+                    bucket_key = article.published_at.replace(
+                        minute=0, second=0, microsecond=0
+                    )
+                    hours_offset = bucket_key.hour % interval_hours
+                    bucket_key = bucket_key - timedelta(hours=hours_offset)
+                    
+                    news_buckets[bucket_key] += 1
+                    
+                    if news_first is None or article.published_at < news_first:
+                        news_first = article.published_at
+        
+        # SNS 처리 (메모리에서 키워드 검색)
+        for post in sns_queryset:
+            if post.id in sns_keywords_map and keyword in sns_keywords_map[post.id]:
+                if post.published_at:
+                    bucket_key = post.published_at.replace(
+                        minute=0, second=0, microsecond=0
+                    )
+                    hours_offset = bucket_key.hour % interval_hours
+                    bucket_key = bucket_key - timedelta(hours=hours_offset)
+                    
+                    sns_buckets[bucket_key] += 1
+                    
+                    if sns_first is None or post.published_at < sns_first:
+                        sns_first = post.published_at
+        
+        # 모든 시간대 버킷 합치기
+        all_buckets = set(news_buckets.keys()) | set(sns_buckets.keys())
+        all_buckets = sorted(all_buckets)
+        
+        # 타임라인 데이터 생성
+        news_timeline = [news_buckets.get(bucket, 0) for bucket in all_buckets]
+        sns_timeline = [sns_buckets.get(bucket, 0) for bucket in all_buckets]
+        
+        # 시간 레이블 생성 (문자열 형식)
+        time_labels = [bucket.strftime('%Y-%m-%d %H:%M') for bucket in all_buckets]
+        
+        timeline_data = {
+            'keyword': keyword,
+            'news_timeline': news_timeline,
+            'sns_timeline': sns_timeline,
+            'time_labels': time_labels,
+            'time_buckets': [bucket.isoformat() for bucket in all_buckets],
+            'news_first_occurrence': news_first.isoformat() if news_first else None,
+            'sns_first_occurrence': sns_first.isoformat() if sns_first else None,
+            'interval_hours': interval_hours
+        }
+        
         timelines[keyword] = timeline_data
-        all_time_labels.update(timeline_data['time_labels'])
+        all_time_labels.update(time_labels)
     
     # 모든 시간 레이블 정렬
     common_time_labels = sorted(list(all_time_labels))
@@ -1082,6 +1173,25 @@ def get_keyword_timeline(
     # 분석기 가져오기
     analyzer = get_analyzer()
     
+    # 최적화: 모든 게시물을 한 번만 형태소 분석하고 결과 재사용
+    logger.info(f"뉴스 기사 형태소 분석 시작: {news_queryset.count()}개")
+    news_keywords_map = {}
+    for article in news_queryset:
+        text = extract_text_from_news_article(article)
+        if text:
+            keywords_extracted = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+            news_keywords_map[article.id] = keywords_extracted
+    
+    logger.info(f"SNS 게시물 형태소 분석 시작: {sns_queryset.count()}개")
+    sns_keywords_map = {}
+    for post in sns_queryset:
+        text = extract_text_from_sns_post(post)
+        if text:
+            keywords_extracted = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+            sns_keywords_map[post.id] = keywords_extracted
+    
+    logger.info("형태소 분석 완료. 타임라인 집계 시작")
+    
     # 시간대별 집계를 위한 딕셔너리
     news_buckets = defaultdict(int)
     sns_buckets = defaultdict(int)
@@ -1089,45 +1199,35 @@ def get_keyword_timeline(
     news_first = None
     sns_first = None
     
-    # 뉴스 처리
+    # 뉴스 처리 (메모리에서 키워드 검색)
     for article in news_queryset:
-        text = extract_text_from_news_article(article)
-        if not text:
-            continue
-        
-        keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
-        
-        if keyword in keywords and article.published_at:
-            bucket_key = article.published_at.replace(
-                minute=0, second=0, microsecond=0
-            )
-            hours_offset = bucket_key.hour % interval_hours
-            bucket_key = bucket_key - timedelta(hours=hours_offset)
-            
-            news_buckets[bucket_key] += 1
-            
-            if news_first is None or article.published_at < news_first:
-                news_first = article.published_at
+        if article.id in news_keywords_map and keyword in news_keywords_map[article.id]:
+            if article.published_at:
+                bucket_key = article.published_at.replace(
+                    minute=0, second=0, microsecond=0
+                )
+                hours_offset = bucket_key.hour % interval_hours
+                bucket_key = bucket_key - timedelta(hours=hours_offset)
+                
+                news_buckets[bucket_key] += 1
+                
+                if news_first is None or article.published_at < news_first:
+                    news_first = article.published_at
     
-    # SNS 처리
+    # SNS 처리 (메모리에서 키워드 검색)
     for post in sns_queryset:
-        text = extract_text_from_sns_post(post)
-        if not text:
-            continue
-        
-        keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
-        
-        if keyword in keywords and post.published_at:
-            bucket_key = post.published_at.replace(
-                minute=0, second=0, microsecond=0
-            )
-            hours_offset = bucket_key.hour % interval_hours
-            bucket_key = bucket_key - timedelta(hours=hours_offset)
-            
-            sns_buckets[bucket_key] += 1
-            
-            if sns_first is None or post.published_at < sns_first:
-                sns_first = post.published_at
+        if post.id in sns_keywords_map and keyword in sns_keywords_map[post.id]:
+            if post.published_at:
+                bucket_key = post.published_at.replace(
+                    minute=0, second=0, microsecond=0
+                )
+                hours_offset = bucket_key.hour % interval_hours
+                bucket_key = bucket_key - timedelta(hours=hours_offset)
+                
+                sns_buckets[bucket_key] += 1
+                
+                if sns_first is None or post.published_at < sns_first:
+                    sns_first = post.published_at
     
     # 모든 시간대 버킷 합치기
     all_buckets = set(news_buckets.keys()) | set(sns_buckets.keys())
