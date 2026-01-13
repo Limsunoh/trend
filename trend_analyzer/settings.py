@@ -169,6 +169,43 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
+# Celery Beat Schedule
+# data_collector와 analyzer 태스크를 함께 스케줄링할 수 있습니다.
+# 예시:
+# from celery.schedules import crontab
+# from datetime import timedelta
+# 
+# CELERY_BEAT_SCHEDULE = {
+#     # 데이터 수집 (예: 1시간마다)
+#     'collect-all-news': {
+#         'task': 'data_collector.collect_all_rss_news_task',
+#         'schedule': timedelta(hours=1),
+#     },
+#     'collect-all-social': {
+#         'task': 'data_collector.collect_all_social_media_task',
+#         'schedule': timedelta(hours=1),
+#     },
+#     # 데이터 수집 후 분석 (예: 6시간마다)
+#     'analyze-time-lag': {
+#         'task': 'analyzer.analyze_time_lag_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'detect-surge-keywords': {
+#         'task': 'analyzer.detect_surge_keywords_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'analyze-trend-synchronization': {
+#         'task': 'analyzer.analyze_trend_synchronization_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'analyze-hourly-trends': {
+#         'task': 'analyzer.analyze_hourly_trends_task',
+#         'schedule': timedelta(hours=6),
+#     },
+# }
+
+CELERY_BEAT_SCHEDULE = {}
+
 # AWS S3 Configuration
 USE_S3 = os.getenv('USE_S3', 'False') == 'True'
 

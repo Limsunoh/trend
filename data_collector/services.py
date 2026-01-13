@@ -35,6 +35,28 @@ from dcapi.read.title_selenium import main as selenium_title
 # 로거 설정
 logger = logging.getLogger(__name__)
 
+"""
+이 모듈은 다양한 소스에서 데이터를 수집하는 서비스 클래스들을 제공합니다.
+
+주요 클래스 및 기능:
+1. RSSCollectorService: RSS 피드 수집 서비스
+   - parse_feed(): RSS 피드 파싱
+   - collect_from_source(): 특정 소스에서 기사 수집
+   - collect(): 소스 ID/이름으로 수집
+   - create_source_from_rss(): RSS URL로 소스 생성
+
+2. NewsSourceCSVService: CSV 파일에서 뉴스 소스 일괄 생성
+   - load_sources_from_csv(): CSV 파일에서 NewsSource 생성/업데이트
+
+3. DCInsideCollectorService: DC Inside 갤러리 수집 서비스
+   - collect_from_source(): DC Inside 갤러리에서 게시글 수집
+
+4. RedditRSSCollectorService: Reddit RSS 피드 수집 서비스
+   - collect_from_source(): Reddit RSS 피드에서 게시글 수집
+   - _extract_reddit_content(): Reddit HTML에서 실제 내용 추출
+
+모든 서비스는 중복 방지, Rate Limiting, 실시간 통계 집계 등의 기능을 제공합니다.
+"""
 
 class RSSCollectorService:
     """

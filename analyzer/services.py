@@ -13,6 +13,38 @@ logger = logging.getLogger(__name__)
 _STOPWORDS_CACHE: Optional[set] = None
 _STOPWORDS_FILE_MTIME: Optional[float] = None  # 파일 수정 시간
 
+"""
+주요 클래스 및 함수:
+
+1. MorphologicalAnalyzer: 형태소 분석기 클래스
+   - analyze(): 텍스트 형태소 분석
+   - extract_nouns(): 명사 추출
+   - extract_keywords(): 키워드 추출
+   - get_keyword_frequency(): 키워드 빈도 계산
+   - normalize_frequency(): 빈도 정규화
+
+2. 유틸리티 함수:
+   - get_analyzer(): 형태소 분석기 싱글톤 인스턴스 반환
+   - extract_text_from_news_article(): 뉴스 기사에서 텍스트 추출
+   - extract_text_from_sns_post(): SNS 게시물에서 텍스트 추출
+
+3. 플랫폼별 분석 함수:
+   - analyze_news_articles(): 뉴스 기사 키워드 분석
+   - analyze_sns_posts(): SNS 게시물 키워드 분석
+   - compare_platforms(): 뉴스와 SNS 플랫폼 비교 분석
+
+4. 시간차 및 타임라인 분석:
+   - analyze_time_lag(): 뉴스와 SNS 간 키워드 전파 패턴 분석
+   - get_keyword_timeline(): 키워드 시간대별 등장 빈도 타임라인
+   - get_multiple_keywords_timeline(): 여러 키워드 타임라인 일괄 생성
+   - get_keyword_occurrence_times(): 키워드 등장 시간 정보 추출
+
+5. 트렌드 분석:
+   - detect_surge_keywords(): 플랫폼별 급상승 키워드 탐지
+   - analyze_trend_synchronization(): 뉴스와 SNS 트렌드 동기화 분석
+   - analyze_hourly_trends(): 시간대별 트렌드 변화 분석
+"""
+
 
 class MorphologicalAnalyzer:
     """
@@ -1250,4 +1282,585 @@ def get_keyword_timeline(
         'sns_first_occurrence': sns_first.isoformat() if sns_first else None,
         'interval_hours': interval_hours
     }
+
+
+def detect_surge_keywords(
+    platform: str = 'both',  # 'news', 'sns', 'both'
+    days: int = 7,
+    interval_hours: int = 6,
+    surge_threshold: float = 2.0,  # 2배 이상 증가 시 급상승으로 간주
+    min_frequency: float = 0.001,
+    top_n: Optional[int] = None,
+    news_queryset=None,
+    sns_queryset=None
+) -> Dict[str, Any]:
+    """
+    플랫폼별 급상승 키워드를 탐지합니다.
+    
+    시간대별 키워드 빈도를 비교하여 급격히 증가한 키워드를 찾습니다.
+    
+    Args:
+        platform: 분석할 플랫폼 ('news', 'sns', 'both')
+        days: 최근 며칠간의 데이터를 분석할지
+        interval_hours: 시간대별 집계 간격 (시간 단위)
+        surge_threshold: 급상승 임계값 (이전 시간대 대비 배수, 기본값: 2.0 = 2배)
+        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
+        top_n: 상위 N개 급상승 키워드만 반환 (None이면 전체)
+        news_queryset: 뉴스 QuerySet (선택적)
+        sns_queryset: SNS QuerySet (선택적)
+        
+    Returns:
+        {
+            'news_surge_keywords': 뉴스 급상승 키워드 리스트,
+            'sns_surge_keywords': SNS 급상승 키워드 리스트,
+            'summary': 요약 통계
+        }
+    """
+    # QuerySet 준비
+    start_date = timezone.now() - timedelta(days=days)
+    
+    if news_queryset is None:
+        news_queryset = NewsArticle.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True).order_by('published_at')
+    
+    if sns_queryset is None:
+        sns_queryset = SocialMediaPost.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True).order_by('published_at')
+    
+    analyzer = get_analyzer()
+    
+    result = {
+        'news_surge_keywords': [],
+        'sns_surge_keywords': [],
+        'summary': {}
+    }
+    
+    # 뉴스 급상승 키워드 탐지
+    if platform in ('news', 'both'):
+        logger.info(f"뉴스 급상승 키워드 탐지 시작: {news_queryset.count()}개 기사")
+        
+        # 시간대별 키워드 빈도 계산
+        news_keywords_map = {}
+        for article in news_queryset:
+            text = extract_text_from_news_article(article)
+            if text:
+                keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+                news_keywords_map[article.id] = {
+                    'keywords': keywords,
+                    'published_at': article.published_at
+                }
+        
+        # 시간대별 버킷으로 분류
+        time_buckets = defaultdict(lambda: defaultdict(int))
+        for article_id, data in news_keywords_map.items():
+            if data['published_at']:
+                bucket_key = data['published_at'].replace(
+                    minute=0, second=0, microsecond=0
+                )
+                hours_offset = bucket_key.hour % interval_hours
+                bucket_key = bucket_key - timedelta(hours=hours_offset)
+                
+                for keyword in data['keywords']:
+                    time_buckets[bucket_key][keyword] += 1
+        
+        # 시간대별로 정렬
+        sorted_buckets = sorted(time_buckets.keys())
+        
+        if len(sorted_buckets) >= 2:
+            # 마지막 시간대와 그 이전 시간대 비교
+            current_bucket = sorted_buckets[-1]
+            previous_bucket = sorted_buckets[-2]
+            
+            current_freq = time_buckets[current_bucket]
+            previous_freq = time_buckets[previous_bucket]
+            
+            # 전체 빈도로 정규화
+            current_total = sum(current_freq.values())
+            previous_total = sum(previous_freq.values())
+            
+            if current_total > 0 and previous_total > 0:
+                surge_keywords = []
+                for keyword, count in current_freq.items():
+                    current_norm = count / current_total if current_total > 0 else 0
+                    previous_norm = previous_freq.get(keyword, 0) / previous_total if previous_total > 0 else 0
+                    
+                    if current_norm >= min_frequency and previous_norm > 0:
+                        growth_ratio = current_norm / previous_norm if previous_norm > 0 else 0
+                        
+                        if growth_ratio >= surge_threshold:
+                            surge_keywords.append({
+                                'keyword': keyword,
+                                'current_frequency': current_norm,
+                                'previous_frequency': previous_norm,
+                                'growth_ratio': growth_ratio,
+                                'current_count': count,
+                                'previous_count': previous_freq.get(keyword, 0),
+                                'time_bucket': current_bucket.isoformat()
+                            })
+                
+                # 증가율 순으로 정렬
+                surge_keywords.sort(key=lambda x: x['growth_ratio'], reverse=True)
+                
+                if top_n and top_n > 0:
+                    surge_keywords = surge_keywords[:top_n]
+                
+                result['news_surge_keywords'] = surge_keywords
+                logger.info(f"뉴스 급상승 키워드 {len(surge_keywords)}개 탐지 완료")
+    
+    # SNS 급상승 키워드 탐지
+    if platform in ('sns', 'both'):
+        logger.info(f"SNS 급상승 키워드 탐지 시작: {sns_queryset.count()}개 게시물")
+        
+        # 시간대별 키워드 빈도 계산
+        sns_keywords_map = {}
+        for post in sns_queryset:
+            text = extract_text_from_sns_post(post)
+            if text:
+                keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+                sns_keywords_map[post.id] = {
+                    'keywords': keywords,
+                    'published_at': post.published_at
+                }
+        
+        # 시간대별 버킷으로 분류
+        time_buckets = defaultdict(lambda: defaultdict(int))
+        for post_id, data in sns_keywords_map.items():
+            if data['published_at']:
+                bucket_key = data['published_at'].replace(
+                    minute=0, second=0, microsecond=0
+                )
+                hours_offset = bucket_key.hour % interval_hours
+                bucket_key = bucket_key - timedelta(hours=hours_offset)
+                
+                for keyword in data['keywords']:
+                    time_buckets[bucket_key][keyword] += 1
+        
+        # 시간대별로 정렬
+        sorted_buckets = sorted(time_buckets.keys())
+        
+        if len(sorted_buckets) >= 2:
+            # 마지막 시간대와 그 이전 시간대 비교
+            current_bucket = sorted_buckets[-1]
+            previous_bucket = sorted_buckets[-2]
+            
+            current_freq = time_buckets[current_bucket]
+            previous_freq = time_buckets[previous_bucket]
+            
+            # 전체 빈도로 정규화
+            current_total = sum(current_freq.values())
+            previous_total = sum(previous_freq.values())
+            
+            if current_total > 0 and previous_total > 0:
+                surge_keywords = []
+                for keyword, count in current_freq.items():
+                    current_norm = count / current_total if current_total > 0 else 0
+                    previous_norm = previous_freq.get(keyword, 0) / previous_total if previous_total > 0 else 0
+                    
+                    if current_norm >= min_frequency and previous_norm > 0:
+                        growth_ratio = current_norm / previous_norm if previous_norm > 0 else 0
+                        
+                        if growth_ratio >= surge_threshold:
+                            surge_keywords.append({
+                                'keyword': keyword,
+                                'current_frequency': current_norm,
+                                'previous_frequency': previous_norm,
+                                'growth_ratio': growth_ratio,
+                                'current_count': count,
+                                'previous_count': previous_freq.get(keyword, 0),
+                                'time_bucket': current_bucket.isoformat()
+                            })
+                
+                # 증가율 순으로 정렬
+                surge_keywords.sort(key=lambda x: x['growth_ratio'], reverse=True)
+                
+                if top_n and top_n > 0:
+                    surge_keywords = surge_keywords[:top_n]
+                
+                result['sns_surge_keywords'] = surge_keywords
+                logger.info(f"SNS 급상승 키워드 {len(surge_keywords)}개 탐지 완료")
+    
+    # 요약 통계
+    result['summary'] = {
+        'platform': platform,
+        'days': days,
+        'interval_hours': interval_hours,
+        'surge_threshold': surge_threshold,
+        'news_surge_count': len(result['news_surge_keywords']),
+        'sns_surge_count': len(result['sns_surge_keywords'])
+    }
+    
+    return result
+
+
+def analyze_trend_synchronization(
+    days: int = 7,
+    interval_hours: int = 6,
+    min_frequency: float = 0.001,
+    top_n: Optional[int] = None,
+    news_queryset=None,
+    sns_queryset=None
+) -> Dict[str, Any]:
+    """
+    뉴스와 SNS의 트렌드 동기화 정도를 분석합니다.
+    
+    시간대별 키워드 빈도 변화 패턴을 비교하여 두 플랫폼이 얼마나 동기화되어 있는지 측정합니다.
+    
+    Args:
+        days: 최근 며칠간의 데이터를 분석할지
+        interval_hours: 시간대별 집계 간격 (시간 단위)
+        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
+        top_n: 상위 N개 키워드만 분석 (None이면 전체)
+        news_queryset: 뉴스 QuerySet (선택적)
+        sns_queryset: SNS QuerySet (선택적)
+        
+    Returns:
+        {
+            'synchronized_keywords': 동기화된 키워드 리스트 (상관관계 높음),
+            'desynchronized_keywords': 비동기화된 키워드 리스트 (상관관계 낮음),
+            'correlation_scores': 키워드별 상관관계 점수,
+            'summary': 요약 통계
+        }
+    """
+    # QuerySet 준비
+    start_date = timezone.now() - timedelta(days=days)
+    
+    if news_queryset is None:
+        news_queryset = NewsArticle.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True).order_by('published_at')
+    
+    if sns_queryset is None:
+        sns_queryset = SocialMediaPost.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True).order_by('published_at')
+    
+    analyzer = get_analyzer()
+    
+    logger.info(f"트렌드 동기화 분석 시작: 뉴스 {news_queryset.count()}개, SNS {sns_queryset.count()}개")
+    
+    # 형태소 분석 (최적화)
+    news_keywords_map = {}
+    for article in news_queryset:
+        text = extract_text_from_news_article(article)
+        if text:
+            keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+            news_keywords_map[article.id] = {
+                'keywords': keywords,
+                'published_at': article.published_at
+            }
+    
+    sns_keywords_map = {}
+    for post in sns_queryset:
+        text = extract_text_from_sns_post(post)
+        if text:
+            keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+            sns_keywords_map[post.id] = {
+                'keywords': keywords,
+                'published_at': post.published_at
+            }
+    
+    # 시간대별 키워드 빈도 계산
+    news_time_buckets = defaultdict(lambda: defaultdict(int))
+    for article_id, data in news_keywords_map.items():
+        if data['published_at']:
+            bucket_key = data['published_at'].replace(
+                minute=0, second=0, microsecond=0
+            )
+            hours_offset = bucket_key.hour % interval_hours
+            bucket_key = bucket_key - timedelta(hours=hours_offset)
+            
+            for keyword in data['keywords']:
+                news_time_buckets[bucket_key][keyword] += 1
+    
+    sns_time_buckets = defaultdict(lambda: defaultdict(int))
+    for post_id, data in sns_keywords_map.items():
+        if data['published_at']:
+            bucket_key = data['published_at'].replace(
+                minute=0, second=0, microsecond=0
+            )
+            hours_offset = bucket_key.hour % interval_hours
+            bucket_key = bucket_key - timedelta(hours=hours_offset)
+            
+            for keyword in data['keywords']:
+                sns_time_buckets[bucket_key][keyword] += 1
+    
+    # 모든 시간대 버킷 합치기
+    all_buckets = sorted(set(news_time_buckets.keys()) | set(sns_time_buckets.keys()))
+    
+    # 공통 키워드 찾기
+    all_news_keywords = set()
+    for bucket in news_time_buckets.values():
+        all_news_keywords.update(bucket.keys())
+    
+    all_sns_keywords = set()
+    for bucket in sns_time_buckets.values():
+        all_sns_keywords.update(bucket.keys())
+    
+    common_keywords = all_news_keywords & all_sns_keywords
+    
+    # 각 키워드에 대해 시간대별 빈도 시퀀스 생성 및 상관관계 계산
+    correlation_scores = []
+    
+    for keyword in common_keywords:
+        news_sequence = []
+        sns_sequence = []
+        
+        for bucket in all_buckets:
+            news_count = news_time_buckets[bucket].get(keyword, 0)
+            sns_count = sns_time_buckets[bucket].get(keyword, 0)
+            
+            # 정규화 (해당 시간대의 전체 키워드 수로 나눔)
+            news_total = sum(news_time_buckets[bucket].values())
+            sns_total = sum(sns_time_buckets[bucket].values())
+            
+            news_norm = news_count / news_total if news_total > 0 else 0
+            sns_norm = sns_count / sns_total if sns_total > 0 else 0
+            
+            if news_norm >= min_frequency or sns_norm >= min_frequency:
+                news_sequence.append(news_norm)
+                sns_sequence.append(sns_norm)
+        
+        # 상관관계 계산 (피어슨 상관계수)
+        if len(news_sequence) >= 2 and len(sns_sequence) >= 2:
+            # 간단한 상관관계 계산
+            n = len(news_sequence)
+            news_mean = sum(news_sequence) / n
+            sns_mean = sum(sns_sequence) / n
+            
+            numerator = sum((news_sequence[i] - news_mean) * (sns_sequence[i] - sns_mean) 
+                          for i in range(n))
+            
+            news_var = sum((x - news_mean) ** 2 for x in news_sequence)
+            sns_var = sum((x - sns_mean) ** 2 for x in sns_sequence)
+            
+            denominator = (news_var * sns_var) ** 0.5
+            
+            if denominator > 0:
+                correlation = numerator / denominator
+            else:
+                correlation = 0.0
+            
+            # 평균 빈도 계산
+            avg_news_freq = news_mean
+            avg_sns_freq = sns_mean
+            
+            correlation_scores.append({
+                'keyword': keyword,
+                'correlation': correlation,
+                'avg_news_frequency': avg_news_freq,
+                'avg_sns_frequency': avg_sns_freq,
+                'news_sequence': news_sequence,
+                'sns_sequence': sns_sequence
+            })
+    
+    # 상관관계 순으로 정렬
+    correlation_scores.sort(key=lambda x: abs(x['correlation']), reverse=True)
+    
+    # 동기화/비동기화 키워드 분류 (상관관계 0.7 이상 = 동기화, 0.3 미만 = 비동기화)
+    synchronized_keywords = [
+        item for item in correlation_scores 
+        if item['correlation'] >= 0.7
+    ]
+    desynchronized_keywords = [
+        item for item in correlation_scores 
+        if item['correlation'] < 0.3
+    ]
+    
+    if top_n and top_n > 0:
+        synchronized_keywords = synchronized_keywords[:top_n]
+        desynchronized_keywords = desynchronized_keywords[:top_n]
+    
+    # 요약 통계
+    avg_correlation = sum(item['correlation'] for item in correlation_scores) / len(correlation_scores) if correlation_scores else 0.0
+    
+    summary = {
+        'total_common_keywords': len(common_keywords),
+        'analyzed_keywords': len(correlation_scores),
+        'synchronized_count': len(synchronized_keywords),
+        'desynchronized_count': len(desynchronized_keywords),
+        'avg_correlation': avg_correlation,
+        'time_buckets_count': len(all_buckets)
+    }
+    
+    logger.info(
+        f"트렌드 동기화 분석 완료: "
+        f"동기화 {summary['synchronized_count']}개, "
+        f"비동기화 {summary['desynchronized_count']}개, "
+        f"평균 상관관계 {avg_correlation:.3f}"
+    )
+    
+    return {
+        'synchronized_keywords': synchronized_keywords,
+        'desynchronized_keywords': desynchronized_keywords,
+        'correlation_scores': correlation_scores,
+        'summary': summary
+    }
+
+
+def analyze_hourly_trends(
+    platform: str = 'both',  # 'news', 'sns', 'both'
+    days: int = 7,
+    min_frequency: float = 0.001,
+    top_n: Optional[int] = None,
+    news_queryset=None,
+    sns_queryset=None
+) -> Dict[str, Any]:
+    """
+    시간대별 트렌드 변화를 분석합니다.
+    
+    시간대(0시~23시)별로 키워드 빈도 변화를 분석하여 시간대별 트렌드 패턴을 파악합니다.
+    
+    Args:
+        platform: 분석할 플랫폼 ('news', 'sns', 'both')
+        days: 최근 며칠간의 데이터를 분석할지
+        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
+        top_n: 시간대별 상위 N개 키워드만 반환 (None이면 전체)
+        news_queryset: 뉴스 QuerySet (선택적)
+        sns_queryset: SNS QuerySet (선택적)
+        
+    Returns:
+        {
+            'news_hourly_trends': 뉴스 시간대별 트렌드,
+            'sns_hourly_trends': SNS 시간대별 트렌드,
+            'summary': 요약 통계
+        }
+    """
+    # QuerySet 준비
+    start_date = timezone.now() - timedelta(days=days)
+    
+    if news_queryset is None:
+        news_queryset = NewsArticle.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True)
+    
+    if sns_queryset is None:
+        sns_queryset = SocialMediaPost.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True)
+    
+    analyzer = get_analyzer()
+    
+    result = {
+        'news_hourly_trends': {},
+        'sns_hourly_trends': {},
+        'summary': {}
+    }
+    
+    # 뉴스 시간대별 트렌드 분석
+    if platform in ('news', 'both'):
+        logger.info(f"뉴스 시간대별 트렌드 분석 시작: {news_queryset.count()}개 기사")
+        
+        # 시간대별 키워드 빈도 계산
+        hourly_keywords = defaultdict(lambda: defaultdict(int))
+        news_keywords_map = {}
+        
+        for article in news_queryset:
+            text = extract_text_from_news_article(article)
+            if text:
+                keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+                news_keywords_map[article.id] = keywords
+                
+                if article.published_at:
+                    hour = article.published_at.hour
+                    for keyword in keywords:
+                        hourly_keywords[hour][keyword] += 1
+        
+        # 시간대별로 정규화 및 상위 키워드 추출
+        for hour in range(24):
+            if hour in hourly_keywords:
+                hour_freq = hourly_keywords[hour]
+                total = sum(hour_freq.values())
+                
+                if total > 0:
+                    # 정규화
+                    normalized = {
+                        k: v / total for k, v in hour_freq.items()
+                        if (v / total) >= min_frequency
+                    }
+                    
+                    # 상위 키워드 추출
+                    sorted_keywords = sorted(
+                        normalized.items(),
+                        key=lambda x: x[1],
+                        reverse=True
+                    )
+                    
+                    if top_n and top_n > 0:
+                        sorted_keywords = sorted_keywords[:top_n]
+                    
+                    result['news_hourly_trends'][hour] = {
+                        'keywords': [
+                            {'keyword': k, 'frequency': v}
+                            for k, v in sorted_keywords
+                        ],
+                        'total_keywords': len(normalized),
+                        'total_count': total
+                    }
+        
+        logger.info(f"뉴스 시간대별 트렌드 분석 완료")
+    
+    # SNS 시간대별 트렌드 분석
+    if platform in ('sns', 'both'):
+        logger.info(f"SNS 시간대별 트렌드 분석 시작: {sns_queryset.count()}개 게시물")
+        
+        # 시간대별 키워드 빈도 계산
+        hourly_keywords = defaultdict(lambda: defaultdict(int))
+        sns_keywords_map = {}
+        
+        for post in sns_queryset:
+            text = extract_text_from_sns_post(post)
+            if text:
+                keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+                sns_keywords_map[post.id] = keywords
+                
+                if post.published_at:
+                    hour = post.published_at.hour
+                    for keyword in keywords:
+                        hourly_keywords[hour][keyword] += 1
+        
+        # 시간대별로 정규화 및 상위 키워드 추출
+        for hour in range(24):
+            if hour in hourly_keywords:
+                hour_freq = hourly_keywords[hour]
+                total = sum(hour_freq.values())
+                
+                if total > 0:
+                    # 정규화
+                    normalized = {
+                        k: v / total for k, v in hour_freq.items()
+                        if (v / total) >= min_frequency
+                    }
+                    
+                    # 상위 키워드 추출
+                    sorted_keywords = sorted(
+                        normalized.items(),
+                        key=lambda x: x[1],
+                        reverse=True
+                    )
+                    
+                    if top_n and top_n > 0:
+                        sorted_keywords = sorted_keywords[:top_n]
+                    
+                    result['sns_hourly_trends'][hour] = {
+                        'keywords': [
+                            {'keyword': k, 'frequency': v}
+                            for k, v in sorted_keywords
+                        ],
+                        'total_keywords': len(normalized),
+                        'total_count': total
+                    }
+        
+        logger.info(f"SNS 시간대별 트렌드 분석 완료")
+    
+    # 요약 통계
+    result['summary'] = {
+        'platform': platform,
+        'days': days,
+        'news_hours_analyzed': len(result['news_hourly_trends']),
+        'sns_hours_analyzed': len(result['sns_hourly_trends'])
+    }
+    
+    return result
 
