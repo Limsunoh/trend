@@ -43,9 +43,8 @@ _STOPWORDS_FILE_MTIME: Optional[float] = None  # 파일 수정 시간
    - detect_surge_keywords(): 플랫폼별 급상승 키워드 탐지
    - analyze_trend_synchronization(): 뉴스와 SNS 트렌드 동기화 분석
    - analyze_hourly_trends(): 시간대별 트렌드 변화 분석
+   - analyze_engagement_keywords(): 참여도 기반 인기 키워드 분석
 """
-
-
 class MorphologicalAnalyzer:
     """
     PyKOMORAN을 사용한 형태소 분석기
@@ -960,7 +959,8 @@ def analyze_time_lag(
             'sns_occurrence_count': len(sns_occurrences),
             'direction': None,
             'time_lag_hours': None,
-            'time_lag_timedelta': None
+            'time_lag_seconds': None,
+            'time_lag_text': None
         }
         
         if news_first and sns_first:
@@ -969,16 +969,20 @@ def analyze_time_lag(
                 # 뉴스가 먼저
                 time_lag = sns_first - news_first
                 result['direction'] = 'news_to_sns'
-                result['time_lag_timedelta'] = time_lag
-                result['time_lag_hours'] = time_lag.total_seconds() / 3600
-                news_to_sns_lags.append(time_lag.total_seconds() / 3600)
+                time_lag_seconds = time_lag.total_seconds()
+                result['time_lag_seconds'] = time_lag_seconds
+                result['time_lag_text'] = str(time_lag)
+                result['time_lag_hours'] = time_lag_seconds / 3600
+                news_to_sns_lags.append(time_lag_seconds / 3600)
             elif sns_first < news_first:
                 # SNS가 먼저
                 time_lag = news_first - sns_first
                 result['direction'] = 'sns_to_news'
-                result['time_lag_timedelta'] = time_lag
-                result['time_lag_hours'] = time_lag.total_seconds() / 3600
-                sns_to_news_lags.append(time_lag.total_seconds() / 3600)
+                time_lag_seconds = time_lag.total_seconds()
+                result['time_lag_seconds'] = time_lag_seconds
+                result['time_lag_text'] = str(time_lag)
+                result['time_lag_hours'] = time_lag_seconds / 3600
+                sns_to_news_lags.append(time_lag_seconds / 3600)
             else:
                 # 동시 등장 (거의 불가능하지만)
                 result['direction'] = 'simultaneous'
@@ -1563,7 +1567,7 @@ def analyze_trend_synchronization(
     
     # 시간대별 키워드 빈도 계산
     news_time_buckets = defaultdict(lambda: defaultdict(int))
-    for article_id, data in news_keywords_map.items():
+    for _, data in news_keywords_map.items():
         if data['published_at']:
             bucket_key = data['published_at'].replace(
                 minute=0, second=0, microsecond=0
@@ -1575,7 +1579,7 @@ def analyze_trend_synchronization(
                 news_time_buckets[bucket_key][keyword] += 1
     
     sns_time_buckets = defaultdict(lambda: defaultdict(int))
-    for post_id, data in sns_keywords_map.items():
+    for _, data in sns_keywords_map.items():
         if data['published_at']:
             bucket_key = data['published_at'].replace(
                 minute=0, second=0, microsecond=0
@@ -1864,3 +1868,202 @@ def analyze_hourly_trends(
     
     return result
 
+
+def analyze_engagement_keywords(
+    days: int = 7,
+    min_frequency: float = 0.001,
+    top_n: Optional[int] = None,
+    engagement_weights: Optional[Dict[str, float]] = None,
+    sns_queryset=None
+) -> Dict[str, Any]:
+    """
+    참여도 기반 인기 키워드를 분석합니다.
+    
+    SNS 게시물의 참여도 메트릭(조회수, 댓글수, 좋아요수, 공유수)을 활용하여
+    실제 반응이 높은 키워드를 식별합니다.
+    
+    Args:
+        days: 최근 며칠간의 데이터를 분석할지
+        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
+        top_n: 상위 N개 키워드만 반환 (None이면 전체)
+        engagement_weights: 참여도 가중치 딕셔너리
+            - 기본값: {'views': 0.1, 'comments': 0.3, 'likes': 0.4, 'shares': 0.2}
+            - 각 메트릭의 중요도를 조정할 수 있음
+        sns_queryset: SNS QuerySet (선택적)
+        
+    Returns:
+        {
+            'engagement_keywords': 참여도 기반 키워드 리스트,
+            'viral_keywords': 바이럴 키워드 리스트 (참여도 급상승),
+            'summary': 요약 통계
+        }
+    """
+    # QuerySet 준비
+    start_date = timezone.now() - timedelta(days=days)
+    
+    if sns_queryset is None:
+        sns_queryset = SocialMediaPost.objects.filter(
+            published_at__gte=start_date
+        ).exclude(published_at__isnull=True)
+    
+    # 참여도 가중치 설정 (기본값)
+    if engagement_weights is None:
+        engagement_weights = {
+            'views': 0.1,
+            'comments': 0.3,
+            'likes': 0.4,
+            'shares': 0.2
+        }
+    
+    analyzer = get_analyzer()
+    
+    logger.info(f"참여도 기반 키워드 분석 시작: {sns_queryset.count()}개 게시물")
+    
+    # 키워드별 참여도 집계
+    keyword_engagement = defaultdict(lambda: {
+        'total_engagement': 0.0,
+        'post_count': 0,
+        'total_views': 0,
+        'total_comments': 0,
+        'total_likes': 0,
+        'total_shares': 0,
+        'posts': []
+    })
+    
+    # 형태소 분석 및 참여도 계산
+    for post in sns_queryset:
+        text = extract_text_from_sns_post(post)
+        if not text:
+            continue
+        
+        # 키워드 추출
+        keywords = analyzer.extract_keywords(text, min_length=2, exclude_stopwords=True)
+        
+        # 참여도 점수 계산
+        views = post.views_count or 0
+        comments = post.comments_count or 0
+        likes = post.likes_count or 0
+        shares = post.shares_count or 0
+        
+        engagement_score = (
+            views * engagement_weights['views'] +
+            comments * engagement_weights['comments'] +
+            likes * engagement_weights['likes'] +
+            shares * engagement_weights['shares']
+        )
+        
+        # 각 키워드에 참여도 점수 추가
+        for keyword in keywords:
+            keyword_engagement[keyword]['total_engagement'] += engagement_score
+            keyword_engagement[keyword]['post_count'] += 1
+            keyword_engagement[keyword]['total_views'] += views
+            keyword_engagement[keyword]['total_comments'] += comments
+            keyword_engagement[keyword]['total_likes'] += likes
+            keyword_engagement[keyword]['total_shares'] += shares
+            keyword_engagement[keyword]['posts'].append({
+                'post_id': post.id,
+                'engagement_score': engagement_score,
+                'views': views,
+                'comments': comments,
+                'likes': likes,
+                'shares': shares
+            })
+    
+    # 키워드별 평균 참여도 계산 및 정규화
+    total_posts = sns_queryset.count()
+    engagement_keywords = []
+    
+    for keyword, data in keyword_engagement.items():
+        post_count = data['post_count']
+        
+        # 최소 빈도 필터링
+        frequency = post_count / total_posts if total_posts > 0 else 0
+        if frequency < min_frequency:
+            continue
+        
+        # 평균 참여도 계산
+        avg_engagement = data['total_engagement'] / post_count if post_count > 0 else 0
+        avg_views = data['total_views'] / post_count if post_count > 0 else 0
+        avg_comments = data['total_comments'] / post_count if post_count > 0 else 0
+        avg_likes = data['total_likes'] / post_count if post_count > 0 else 0
+        avg_shares = data['total_shares'] / post_count if post_count > 0 else 0
+        
+        engagement_keywords.append({
+            'keyword': keyword,
+            'frequency': frequency,
+            'post_count': post_count,
+            'avg_engagement_score': avg_engagement,
+            'total_engagement_score': data['total_engagement'],
+            'avg_views': avg_views,
+            'avg_comments': avg_comments,
+            'avg_likes': avg_likes,
+            'avg_shares': avg_shares,
+            'total_views': data['total_views'],
+            'total_comments': data['total_comments'],
+            'total_likes': data['total_likes'],
+            'total_shares': data['total_shares']
+        })
+    
+    # 평균 참여도 순으로 정렬
+    engagement_keywords.sort(key=lambda x: x['avg_engagement_score'], reverse=True)
+    
+    # top_n 적용
+    if top_n and top_n > 0:
+        engagement_keywords = engagement_keywords[:top_n]
+    
+    # 바이럴 키워드 탐지 (참여도가 높으면서 최근 급상승한 키워드)
+    viral_keywords = []
+    if len(engagement_keywords) > 0:
+        # 상위 20% 키워드 중에서 최근 참여도가 높은 것들을 바이럴로 간주
+        top_20_percent = max(1, int(len(engagement_keywords) * 0.2))
+        top_keywords = engagement_keywords[:top_20_percent]
+        
+        # 최근 게시물의 참여도가 평균보다 높은 키워드 찾기
+        for item in top_keywords:
+            keyword = item['keyword']
+            keyword_data = keyword_engagement[keyword]
+            
+            # 최근 게시물들의 참여도 확인 (최근 1일)
+            recent_cutoff = timezone.now() - timedelta(days=1)
+            recent_posts = [
+                p for p in keyword_data['posts']
+                if sns_queryset.filter(id=p['post_id'], published_at__gte=recent_cutoff).exists()
+            ]
+            
+            if recent_posts:
+                recent_avg_engagement = sum(p['engagement_score'] for p in recent_posts) / len(recent_posts)
+                
+                # 최근 평균이 전체 평균보다 높으면 바이럴로 간주
+                if recent_avg_engagement > item['avg_engagement_score'] * 1.5:
+                    viral_keywords.append({
+                        **item,
+                        'recent_avg_engagement': recent_avg_engagement,
+                        'recent_post_count': len(recent_posts),
+                        'viral_score': recent_avg_engagement / item['avg_engagement_score'] if item['avg_engagement_score'] > 0 else 0
+                    })
+        
+        # 바이럴 점수 순으로 정렬
+        viral_keywords.sort(key=lambda x: x.get('viral_score', 0), reverse=True)
+    
+    # 요약 통계
+    summary = {
+        'days': days,
+        'total_posts': total_posts,
+        'total_keywords': len(engagement_keywords),
+        'viral_keywords_count': len(viral_keywords),
+        'engagement_weights': engagement_weights,
+        'top_engagement_score': engagement_keywords[0]['avg_engagement_score'] if engagement_keywords else 0,
+        'avg_engagement_score': sum(item['avg_engagement_score'] for item in engagement_keywords) / len(engagement_keywords) if engagement_keywords else 0
+    }
+    
+    logger.info(
+        f"참여도 기반 키워드 분석 완료: "
+        f"키워드 {len(engagement_keywords)}개, "
+        f"바이럴 키워드 {len(viral_keywords)}개"
+    )
+    
+    return {
+        'engagement_keywords': engagement_keywords,
+        'viral_keywords': viral_keywords,
+        'summary': summary
+    }

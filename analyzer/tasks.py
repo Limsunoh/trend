@@ -4,7 +4,7 @@ Celery 작업 모듈
 비동기로 키워드 분석 작업을 수행하는 Celery 태스크들을 정의합니다.
 """
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict
 from celery import shared_task
 from django.utils import timezone
 
@@ -18,10 +18,46 @@ from analyzer.services import (
     analyze_hourly_trends,
     get_keyword_occurrence_times,
     get_multiple_keywords_timeline,
-    get_keyword_timeline
+    get_keyword_timeline,
+    analyze_engagement_keywords
+)
+from analyzer.result_storage import (
+    store_analysis_result,
+    cache_latest_analysis
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _store_and_cache_result(
+    analysis_type: str,
+    result_payload: Dict,
+    parameters: Optional[Dict] = None,
+    platform: Optional[str] = None,
+    days: Optional[int] = None,
+    summary: Optional[Dict] = None
+):
+    try:
+        store_analysis_result(
+            analysis_type=analysis_type,
+            result=result_payload,
+            parameters=parameters,
+            platform=platform,
+            days=days,
+            summary=summary
+        )
+        cache_latest_analysis(
+            analysis_type=analysis_type,
+            result=result_payload,
+            parameters=parameters,
+            platform=platform,
+            days=days
+        )
+    except Exception as e:
+        logger.warning(
+            f"분석 결과 저장/캐시 실패: {analysis_type}, 오류: {str(e)}",
+            exc_info=True
+        )
 
 
 @shared_task(name='analyzer.analyze_keywords_task')
@@ -64,12 +100,29 @@ def analyze_keywords_task(days: int = 7, top_n: int = 50):
             f"SNS {sns_result['total_posts']}개"
         )
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        summary = {
+            'news_total_articles': news_result.get('total_articles', 0),
+            'sns_total_posts': sns_result.get('total_posts', 0),
+            'news_keywords_count': len(news_result.get('top_keywords', [])),
+            'sns_keywords_count': len(sns_result.get('top_keywords', []))
+        }
+        result_payload = {
             'status': 'success',
             'news': news_result,
             'sns': sns_result,
-            'analyzed_at': timezone.now().isoformat()
+            'summary': summary,
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='keywords',
+            result_payload=result_payload,
+            parameters={'days': days, 'top_n': top_n},
+            platform='both',
+            days=days,
+            summary=summary
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"키워드 분석 작업 실패: {str(e)}", exc_info=True)
@@ -120,11 +173,21 @@ def compare_platforms_task(days: int = 7, top_n: int = 30, min_frequency: float 
             f"공통 키워드 {result['summary']['common_keywords_count']}개"
         )
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
             'status': 'success',
             'result': result,
-            'analyzed_at': timezone.now().isoformat()
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='compare_platforms',
+            result_payload=result_payload,
+            parameters={'days': days, 'top_n': top_n, 'min_frequency': min_frequency},
+            platform='both',
+            days=days,
+            summary=result.get('summary', {})
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"플랫폼 비교 분석 작업 실패: {str(e)}", exc_info=True)
@@ -187,13 +250,29 @@ def update_hot_keywords(days: int = 1, top_n: int = 20):
         
         logger.info(f"인기 키워드 업데이트 완료: 공통 키워드 {len(common_keywords)}개")
         
-        return {
+        updated_at = timezone.now().isoformat()
+        summary = {
+            'news_keywords_count': len(news_result.get('top_keywords', [])),
+            'sns_keywords_count': len(sns_result.get('top_keywords', [])),
+            'common_keywords_count': len(common_keywords)
+        }
+        result_payload = {
             'status': 'success',
             'news_hot_keywords': news_result['top_keywords'],
             'sns_hot_keywords': sns_result['top_keywords'],
             'common_keywords': common_keywords,
-            'updated_at': timezone.now().isoformat()
+            'summary': summary,
+            'updated_at': updated_at
         }
+        _store_and_cache_result(
+            analysis_type='hot_keywords',
+            result_payload=result_payload,
+            parameters={'days': days, 'top_n': top_n},
+            platform='both',
+            days=days,
+            summary=summary
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"인기 키워드 업데이트 실패: {str(e)}", exc_info=True)
@@ -240,11 +319,25 @@ def analyze_time_lag_task(
             f"총 {statistics.get('total_keywords', 0)}개 키워드 분석"
         )
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
             'status': 'success',
             'result': result,
-            'analyzed_at': timezone.now().isoformat()
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='time_lag',
+            result_payload=result_payload,
+            parameters={
+                'days': days,
+                'top_n': top_n,
+                'min_frequency': min_frequency
+            },
+            platform='both',
+            days=days,
+            summary=result.get('statistics', {})
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"시간차 분석 작업 실패: {str(e)}", exc_info=True)
@@ -300,11 +393,28 @@ def detect_surge_keywords_task(
             f"SNS {summary.get('sns_surge_count', 0)}개"
         )
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
             'status': 'success',
             'result': result,
-            'analyzed_at': timezone.now().isoformat()
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='surge_keywords',
+            result_payload=result_payload,
+            parameters={
+                'platform': platform,
+                'days': days,
+                'interval_hours': interval_hours,
+                'surge_threshold': surge_threshold,
+                'min_frequency': min_frequency,
+                'top_n': top_n
+            },
+            platform=platform,
+            days=days,
+            summary=result.get('summary', {})
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"급상승 키워드 탐지 작업 실패: {str(e)}", exc_info=True)
@@ -355,11 +465,26 @@ def analyze_trend_synchronization_task(
             f"평균 상관관계 {summary.get('avg_correlation', 0):.3f}"
         )
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
             'status': 'success',
             'result': result,
-            'analyzed_at': timezone.now().isoformat()
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='trend_synchronization',
+            result_payload=result_payload,
+            parameters={
+                'days': days,
+                'interval_hours': interval_hours,
+                'min_frequency': min_frequency,
+                'top_n': top_n
+            },
+            platform='both',
+            days=days,
+            summary=result.get('summary', {})
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"트렌드 동기화 분석 작업 실패: {str(e)}", exc_info=True)
@@ -409,11 +534,26 @@ def analyze_hourly_trends_task(
             f"SNS {summary.get('sns_hours_analyzed', 0)}시간대"
         )
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
             'status': 'success',
             'result': result,
-            'analyzed_at': timezone.now().isoformat()
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='hourly_trends',
+            result_payload=result_payload,
+            parameters={
+                'platform': platform,
+                'days': days,
+                'min_frequency': min_frequency,
+                'top_n': top_n
+            },
+            platform=platform,
+            days=days,
+            summary=result.get('summary', {})
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"시간대별 트렌드 분석 작업 실패: {str(e)}", exc_info=True)
@@ -461,7 +601,8 @@ def get_keyword_occurrence_times_task(
         first_occurrence = result.get('first_occurrence')
         last_occurrence = result.get('last_occurrence')
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
             'status': 'success',
             'result': {
                 'first_occurrence': (
@@ -477,8 +618,17 @@ def get_keyword_occurrence_times_task(
                     t.isoformat() for t in result.get('all_times', [])
                 ]
             },
-            'analyzed_at': timezone.now().isoformat()
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='keyword_occurrence_times',
+            result_payload=result_payload,
+            parameters={'keyword': keyword, 'platform': platform, 'days': days},
+            platform=platform,
+            days=days,
+            summary={'occurrence_count': result.get('occurrence_count', 0)}
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"키워드 등장 시간 추출 작업 실패: {str(e)}", exc_info=True)
@@ -523,11 +673,25 @@ def get_keyword_timeline_task(
             f"시간대 버킷 {len(result.get('time_labels', []))}개"
         )
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
             'status': 'success',
             'result': result,
-            'analyzed_at': timezone.now().isoformat()
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='keyword_timeline',
+            result_payload=result_payload,
+            parameters={
+                'keyword': keyword,
+                'days': days,
+                'interval_hours': interval_hours
+            },
+            platform='both',
+            days=days,
+            summary={'time_buckets': len(result.get('time_labels', []))}
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"키워드 타임라인 생성 작업 실패: {str(e)}", exc_info=True)
@@ -572,14 +736,97 @@ def get_multiple_keywords_timeline_task(
             f"타임라인 {len(result.get('timelines', {}))}개"
         )
         
-        return {
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
             'status': 'success',
             'result': result,
-            'analyzed_at': timezone.now().isoformat()
+            'analyzed_at': analyzed_at
         }
+        _store_and_cache_result(
+            analysis_type='multiple_keywords_timeline',
+            result_payload=result_payload,
+            parameters={
+                'keywords': keywords,
+                'days': days,
+                'interval_hours': interval_hours
+            },
+            platform='both',
+            days=days,
+            summary={'timeline_count': len(result.get('timelines', {}))}
+        )
+        return result_payload
         
     except Exception as e:
         logger.error(f"여러 키워드 타임라인 생성 작업 실패: {str(e)}", exc_info=True)
+        return {
+            'status': 'error',
+            'error': str(e),
+            'analyzed_at': timezone.now().isoformat()
+        }
+
+
+@shared_task(name='analyzer.analyze_engagement_keywords_task')
+def analyze_engagement_keywords_task(
+    days: int = 7,
+    min_frequency: float = 0.001,
+    top_n: Optional[int] = None,
+    engagement_weights: Optional[Dict[str, float]] = None
+):
+    """
+    참여도 기반 인기 키워드를 분석하는 Celery 작업
+    
+    Args:
+        days: 최근 며칠간의 데이터를 분석할지 (기본값: 7)
+        min_frequency: 최소 상대 빈도 (기본값: 0.001 = 0.1%)
+        top_n: 상위 N개 키워드만 반환 (None이면 전체)
+        engagement_weights: 참여도 가중치 딕셔너리 (선택적)
+        
+    Returns:
+        참여도 기반 키워드 분석 결과 딕셔너리
+    """
+    try:
+        logger.info(
+            f"참여도 기반 키워드 분석 작업 시작: "
+            f"최근 {days}일간, 최소 빈도 {min_frequency}"
+        )
+        
+        result = analyze_engagement_keywords(
+            days=days,
+            min_frequency=min_frequency,
+            top_n=top_n,
+            engagement_weights=engagement_weights
+        )
+        
+        summary = result.get('summary', {})
+        logger.info(
+            f"참여도 기반 키워드 분석 완료: "
+            f"키워드 {summary.get('total_keywords', 0)}개, "
+            f"바이럴 키워드 {summary.get('viral_keywords_count', 0)}개"
+        )
+        
+        analyzed_at = timezone.now().isoformat()
+        result_payload = {
+            'status': 'success',
+            'result': result,
+            'analyzed_at': analyzed_at
+        }
+        _store_and_cache_result(
+            analysis_type='engagement_keywords',
+            result_payload=result_payload,
+            parameters={
+                'days': days,
+                'min_frequency': min_frequency,
+                'top_n': top_n,
+                'engagement_weights': engagement_weights
+            },
+            platform='sns',
+            days=days,
+            summary=result.get('summary', {})
+        )
+        return result_payload
+        
+    except Exception as e:
+        logger.error(f"참여도 기반 키워드 분석 작업 실패: {str(e)}", exc_info=True)
         return {
             'status': 'error',
             'error': str(e),

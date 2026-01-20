@@ -5,6 +5,8 @@ Django settings for trend_analyzer project.
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from celery.schedules import crontab
+from datetime import timedelta
 
 # Load environment variables
 load_dotenv(override=True)
@@ -152,6 +154,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = os.getenv('REDIS_PORT', '6379')
 REDIS_DB = os.getenv('REDIS_DB', '0')
+ANALYSIS_CACHE_TTL_SECONDS = int(
+    os.getenv('ANALYSIS_CACHE_TTL_SECONDS', str(6 * 3600))
+)
 
 CACHES = {
     'default': {
@@ -171,9 +176,6 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
 # Celery Beat Schedule
 # data_collector와 analyzer 태스크를 함께 스케줄링할 수 있습니다.
-# 예시:
-# from celery.schedules import crontab
-# from datetime import timedelta
 # 
 # CELERY_BEAT_SCHEDULE = {
 #     # 데이터 수집 (예: 1시간마다)
