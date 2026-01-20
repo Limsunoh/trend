@@ -29,6 +29,23 @@ from analyzer.result_storage import (
 logger = logging.getLogger(__name__)
 
 
+def _prune_for_db(payload):
+    """
+    DB 저장 용량 절감을 위해 대용량 필드를 제거합니다.
+    - absolute_frequency, normalized_frequency는 저장하지 않음
+    """
+    if isinstance(payload, dict):
+        pruned = {}
+        for key, value in payload.items():
+            if key in {'absolute_frequency', 'normalized_frequency'}:
+                continue
+            pruned[key] = _prune_for_db(value)
+        return pruned
+    if isinstance(payload, list):
+        return [_prune_for_db(item) for item in payload]
+    return payload
+
+
 def _store_and_cache_result(
     analysis_type: str,
     result_payload: Dict,
@@ -38,10 +55,11 @@ def _store_and_cache_result(
     summary: Optional[Dict] = None
 ):
     try:
-        # DB에 이력 저장
+        # DB에 이력 저장 (대용량 필드 제거)
+        db_payload = _prune_for_db(result_payload)
         store_analysis_result(
             analysis_type=analysis_type,
-            result=result_payload,
+            result=db_payload,
             parameters=parameters,
             platform=platform,
             days=days,
