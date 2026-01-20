@@ -14,6 +14,7 @@ from common.redis_services import AnalysisCacheService
 
 
 def _json_default(value):
+    # JSONField에 저장 가능한 타입으로 변환
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, Decimal):
@@ -25,6 +26,7 @@ def _make_json_safe(payload: Any) -> Any:
     """
     JSONField 저장을 위해 직렬화 가능한 형태로 변환
     """
+    # datetime/decimal 등을 문자열/숫자로 변환해서 JSON dump
     return json.loads(json.dumps(payload, default=_json_default, ensure_ascii=False))
 
 
@@ -41,6 +43,7 @@ def store_analysis_result(
     """
     분석 결과를 DB에 저장
     """
+    # JSONField 저장을 위해 안전 변환 후 DB 저장
     safe_result = _make_json_safe(result)
     safe_parameters = _make_json_safe(parameters or {})
     safe_summary = _make_json_safe(summary or result.get('summary', {}))
@@ -68,6 +71,7 @@ def cache_latest_analysis(
     """
     최신 분석 결과를 Redis에 캐싱
     """
+    # 캐시는 최신 결과만 보관
     cache_service = AnalysisCacheService()
     safe_result = _make_json_safe(result)
     cache_service.set_latest_result(
@@ -89,6 +93,7 @@ def get_latest_analysis(
     """
     최신 분석 결과 조회 (Redis -> DB fallback)
     """
+    # 1) Redis 캐시 확인
     cache_service = AnalysisCacheService()
     cached = cache_service.get_latest_result(
         analysis_type=analysis_type,
@@ -99,6 +104,7 @@ def get_latest_analysis(
     if cached:
         return cached
     
+    # 2) 캐시가 없으면 DB에서 최신 결과 조회
     queryset = TrendAnalysisResult.objects.filter(
         analysis_type=analysis_type
     )
@@ -112,6 +118,7 @@ def get_latest_analysis(
         return None
     
     result = latest.result_data
+    # 3) 다음 요청을 위해 캐시에 저장
     cache_latest_analysis(
         analysis_type=analysis_type,
         result=result,

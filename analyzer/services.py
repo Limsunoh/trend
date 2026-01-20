@@ -352,8 +352,10 @@ def get_analyzer(model_type: str = "STABLE", java_path: Optional[str] = None) ->
     Returns:
         MorphologicalAnalyzer 인스턴스
     """
+    # 전역 싱글톤 재사용 (초기화 비용 절감)
     global _analyzer_instance
 
+    # 최초 생성 또는 모델 타입 변경 시에만 새로 생성
     if (_analyzer_instance is None or
             _analyzer_instance.model_type != model_type):
         _analyzer_instance = MorphologicalAnalyzer(
@@ -375,6 +377,7 @@ def extract_text_from_news_article(article) -> str:
     Returns:
         분석할 텍스트 (title + description)
     """
+    # 제목 + 요약을 합쳐 분석 텍스트 생성
     text = article.title or ""
     if article.description:
         text += " " + article.description
@@ -391,6 +394,7 @@ def extract_text_from_sns_post(post) -> str:
     Returns:
         분석할 텍스트 (title + content)
     """
+    # 제목 + 본문을 합쳐 분석 텍스트 생성
     text = post.title or ""
     if post.content:
         text += " " + post.content
@@ -442,14 +446,14 @@ def analyze_news_articles(
         # 상위 10개 키워드만
         result = analyze_news_articles(days=7, top_n=10)
     """
-    # QuerySet 준비
+    # QuerySet 준비 (없으면 최근 N일 자동 조회)
     if queryset is None:
         start_date = timezone.now() - timedelta(days=days)
         queryset = NewsArticle.objects.filter(
             published_at__gte=start_date
         )
     
-    # 텍스트 추출
+    # 텍스트 추출 (title + description)
     texts = []
     for article in queryset:
         text = extract_text_from_news_article(article)
@@ -466,7 +470,7 @@ def analyze_news_articles(
             'top_keywords': []
         }
     
-    # 분석기 가져오기
+    # 분석기 가져오기 (싱글톤)
     analyzer = get_analyzer()
     
     # 절대 빈도 계산
@@ -546,14 +550,14 @@ def analyze_sns_posts(
         posts = SocialMediaPost.objects.filter(source__platform='reddit')
         result = analyze_sns_posts(queryset=posts)
     """
-    # QuerySet 준비
+    # QuerySet 준비 (없으면 최근 N일 자동 조회)
     if queryset is None:
         start_date = timezone.now() - timedelta(days=days)
         queryset = SocialMediaPost.objects.filter(
             published_at__gte=start_date
         )
     
-    # 텍스트 추출
+    # 텍스트 추출 (title + content)
     texts = []
     for post in queryset:
         text = extract_text_from_sns_post(post)
@@ -570,7 +574,7 @@ def analyze_sns_posts(
             'top_keywords': []
         }
     
-    # 분석기 가져오기
+    # 분석기 가져오기 (싱글톤)
     analyzer = get_analyzer()
     
     # 절대 빈도 계산
@@ -656,7 +660,7 @@ def compare_platforms(
         # 최소 빈도 필터링
         result = compare_platforms(days=7, min_frequency=0.01)  # 1% 이상만
     """
-    # 각 플랫폼 분석
+    # 각 플랫폼 분석 (뉴스/SNS 각각 분석 결과)
     news_result = analyze_news_articles(
         queryset=news_queryset,
         days=days,
@@ -674,7 +678,7 @@ def compare_platforms(
     news_norm = news_result['normalized_frequency']
     sns_norm = sns_result['normalized_frequency']
     
-    # 최소 빈도 필터링
+    # 최소 빈도 필터링 (잡음 키워드 제거)
     news_norm_filtered = {
         k: v for k, v in news_norm.items()
         if v >= min_frequency
@@ -684,10 +688,10 @@ def compare_platforms(
         if v >= min_frequency
     }
     
-    # 공통 키워드 찾기
+    # 공통 키워드 찾기 (교집합)
     common_keywords_set = set(news_norm_filtered.keys()) & set(sns_norm_filtered.keys())
     
-    # 공통 키워드 비교 리스트 생성
+    # 공통 키워드 비교 리스트 생성 (플랫폼 간 빈도 비교)
     common_keywords = []
     for keyword in common_keywords_set:
         news_freq = news_norm_filtered[keyword]
@@ -705,13 +709,13 @@ def compare_platforms(
             'sns_absolute': sns_result['absolute_frequency'].get(keyword, 0)
         })
     
-    # 빈도 합으로 정렬 (높은 순)
+    # 빈도 합으로 정렬 (뉴스+SNS 합 기준)
     common_keywords.sort(
         key=lambda x: x['news_frequency'] + x['sns_frequency'],
         reverse=True
     )
     
-    # top_n 적용
+    # top_n 적용 (상위 N개만 남김)
     if top_n and top_n > 0:
         common_keywords = common_keywords[:top_n]
     

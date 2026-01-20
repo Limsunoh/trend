@@ -3,6 +3,7 @@ from django.db import models
 
 class TrendAnalysisResult(models.Model):
     """트렌드 분석 결과 저장 (하이브리드: DB 이력 + Redis 최신 캐시)"""
+    # analysis_type/플랫폼/기간 기준으로 조회가 많아 인덱스 사용
     analysis_type = models.CharField(max_length=50, db_index=True)
     platform = models.CharField(
         max_length=10,

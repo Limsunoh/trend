@@ -38,6 +38,7 @@ def _store_and_cache_result(
     summary: Optional[Dict] = None
 ):
     try:
+        # DB에 이력 저장
         store_analysis_result(
             analysis_type=analysis_type,
             result=result_payload,
@@ -46,6 +47,7 @@ def _store_and_cache_result(
             days=days,
             summary=summary
         )
+        # Redis에는 최신 결과만 캐시
         cache_latest_analysis(
             analysis_type=analysis_type,
             result=result_payload,
@@ -54,6 +56,7 @@ def _store_and_cache_result(
             days=days
         )
     except Exception as e:
+        # 저장 실패는 태스크 실패로 이어지지 않도록 로그만 남김
         logger.warning(
             f"분석 결과 저장/캐시 실패: {analysis_type}, 오류: {str(e)}",
             exc_info=True
