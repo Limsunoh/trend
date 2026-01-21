@@ -253,6 +253,32 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
     'SCHEMA_PATH_PREFIX': '/api/',
+    # 성능 최적화 옵션
+    'SCHEMA_COERCE_PATH_PK': True,  # PK를 경로에서 자동 변환
+    'SCHEMA_COERCE_METHOD_NAMES': {
+        'retrieve': 'read',
+        'list': 'read',
+    },
+    # 스키마 생성 최적화
+    'DEFAULT_GENERATOR_CLASS': 'drf_spectacular.generators.SchemaGenerator',
+    # 예제 데이터 생성 최소화 (큰 JSON 필드 때문에)
+    'COMPONENT_NO_READ_ONLY_REQUIRED': True,
+    'ENUM_NAME_OVERRIDES': {},
+    # 스키마 생성 시 예제 크기 제한
+    'SCHEMA_PATH_PREFIX_TRIM': False,  # False로 변경: /api/ 접두사 유지
+    # 큰 필드 처리 최적화
+    'OAS_VERSION': '3.0.3',
+    # 예제 데이터 생성 비활성화 (성능 향상)
+    'DISABLE_ERRORS_AND_WARNINGS': True,
+    # 스키마 생성 시 타임아웃 방지
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'basicAuth': {
+                'type': 'http',
+                'scheme': 'basic',
+            }
+        }
+    },
 }
 
 # CORS Settings
