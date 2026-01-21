@@ -6,16 +6,26 @@
 """
 import logging
 import feedparser
+import csv
+import re
+import requests
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from urllib.parse import urlparse
+from html import unescape
+from time import mktime, struct_time
 from django.utils import timezone
+from django.conf import settings
+from django.db import transaction
+from django.contrib.contenttypes.models import ContentType
+from bs4 import BeautifulSoup
 from common.redis_services import (
     DuplicatePreventionService,
     RateLimitService,
     RealtimeStatsService
 )
 from .models import NewsSource, NewsArticle, DataCollectionJob, SocialMediaSource, SocialMediaPost
+from .serializers import NewsSourceSerializer
 from .translation_service import translation_service
 
 # DC Inside 수집을 위한 라이브러리
@@ -25,6 +35,28 @@ from dcapi.read.title_selenium import main as selenium_title
 # 로거 설정
 logger = logging.getLogger(__name__)
 
+"""
+이 모듈은 다양한 소스에서 데이터를 수집하는 서비스 클래스들을 제공합니다.
+
+주요 클래스 및 기능:
+1. RSSCollectorService: RSS 피드 수집 서비스
+   - parse_feed(): RSS 피드 파싱
+   - collect_from_source(): 특정 소스에서 기사 수집
+   - collect(): 소스 ID/이름으로 수집
+   - create_source_from_rss(): RSS URL로 소스 생성
+
+2. NewsSourceCSVService: CSV 파일에서 뉴스 소스 일괄 생성
+   - load_sources_from_csv(): CSV 파일에서 NewsSource 생성/업데이트
+
+3. DCInsideCollectorService: DC Inside 갤러리 수집 서비스
+   - collect_from_source(): DC Inside 갤러리에서 게시글 수집
+
+4. RedditRSSCollectorService: Reddit RSS 피드 수집 서비스
+   - collect_from_source(): Reddit RSS 피드에서 게시글 수집
+   - _extract_reddit_content(): Reddit HTML에서 실제 내용 추출
+
+모든 서비스는 중복 방지, Rate Limiting, 실시간 통계 집계 등의 기능을 제공합니다.
+"""
 
 class RSSCollectorService:
     """
@@ -57,13 +89,9 @@ class RSSCollectorService:
         
         Redis 서비스들을 초기화하고 로거를 설정합니다.
         """
-        # Redis 서비스 초기화
-        # 중복 방지, Rate Limiting, 통계 집계를 위한 서비스들
         self.duplicate_check = DuplicatePreventionService()
         self.rate_limit = RateLimitService()
         self.stats = RealtimeStatsService()
-        
-        # 로거 설정
         self.logger = logging.getLogger(__name__)
     
     def parse_feed(self, rss_url: str) -> List[Dict]:
@@ -95,51 +123,36 @@ class RSSCollectorService:
                 print(article['title'])
         """
         try:
-            # feedparser를 사용하여 RSS 피드 파싱
-            # feedparser.parse()는 URL을 직접 받아서 HTTP 요청을 수행하고 파싱합니다.
             feed = feedparser.parse(rss_url)
             
-            # 파싱 결과 확인
-            # feed.bozo는 파싱 오류가 발생했는지 여부를 나타냅니다.
             if feed.bozo and feed.bozo_exception:
                 self.logger.warning(
                     f"RSS 피드 파싱 경고: {rss_url} - {feed.bozo_exception}"
                 )
             
-            # 기사 목록 추출
             articles = []
             
-            # feed.entries는 RSS 피드의 각 <item> 또는 Atom 피드의 각 <entry>에 해당합니다.
             for entry in feed.entries:
                 try:
-                    # 발행 시간 파싱
-                    # feedparser는 다양한 날짜 형식을 자동으로 파싱합니다.
                     published_time = None
                     if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                        # published_parsed는 time.struct_time 객체입니다.
-                        # 이를 datetime 객체로 변환합니다.
-                        from time import mktime
                         published_time = datetime.fromtimestamp(
                             mktime(entry.published_parsed)
                         )
                     elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                        # published가 없으면 updated를 사용합니다.
-                        from time import mktime
                         published_time = datetime.fromtimestamp(
                             mktime(entry.updated_parsed)
                         )
                     
-                    # 기사 정보 딕셔너리 생성
                     article = {
-                        'title': entry.get('title', '').strip(),  # 제목
-                        'link': entry.get('link', '').strip(),    # URL
-                        'description': entry.get('description', '').strip(),  # 설명
-                        'published': published_time,  # 발행 시간 (datetime 객체)
-                        'author': entry.get('author', '').strip() if hasattr(entry, 'author') else '',  # 작성자
-                        'category': entry.get('category', '').strip() if hasattr(entry, 'category') else '',  # 카테고리
+                        'title': entry.get('title', '').strip(),
+                        'link': entry.get('link', '').strip(),
+                        'description': entry.get('description', '').strip(),
+                        'published': published_time,
+                        'author': entry.get('author', '').strip() if hasattr(entry, 'author') else '',
+                        'category': entry.get('category', '').strip() if hasattr(entry, 'category') else '',
                     }
                     
-                    # 필수 필드 검증 (제목과 URL은 반드시 있어야 함)
                     if article['title'] and article['link']:
                         articles.append(article)
                     else:
@@ -148,7 +161,6 @@ class RSSCollectorService:
                         )
                         
                 except Exception as e:
-                    # 개별 기사 파싱 오류는 로그만 남기고 계속 진행
                     self.logger.error(
                         f"기사 파싱 오류 (URL: {rss_url}): {str(e)}",
                         exc_info=True
@@ -161,7 +173,6 @@ class RSSCollectorService:
             return articles
             
         except Exception as e:
-            # 전체 파싱 실패 시 로그 기록
             self.logger.error(
                 f"RSS 피드 파싱 실패: {rss_url} - {str(e)}",
                 exc_info=True
@@ -199,7 +210,6 @@ class RSSCollectorService:
         job = None
         try:
             # 수집 작업 로그 생성 (GenericForeignKey 사용)
-            from django.contrib.contenttypes.models import ContentType
             content_type = ContentType.objects.get_for_model(NewsSource)
             job = DataCollectionJob.objects.create(
                 content_type=content_type,
@@ -600,13 +610,6 @@ class NewsSourceCSVService:
                 'error_details': 오류 상세 정보 리스트
             }
         """
-        import csv
-        import os
-        from django.conf import settings
-        from django.db import transaction
-        from .models import NewsSource
-        from .serializers import NewsSourceSerializer
-        
         results = {
             'created': 0,
             'updated': 0,
@@ -875,7 +878,6 @@ class DCInsideCollectorService:
         # 수집 작업 로그 생성 (GenericForeignKey 사용)
         job = None
         try:
-            from django.contrib.contenttypes.models import ContentType
             content_type = ContentType.objects.get_for_model(SocialMediaSource)
             job = DataCollectionJob.objects.create(
                 content_type=content_type,
@@ -1098,9 +1100,6 @@ class DCInsideCollectorService:
                     if not thumbnail_url:
                         content = post_data.get('content', '')
                         if content:
-                            import re
-                            from html import unescape
-                            
                             # <img src="..." /> 또는 <img src='...' /> 패턴 찾기
                             # src 속성이 따옴표 없이도 작동하도록 개선
                             img_pattern = r'<img[^>]+src\s*=\s*["\']?([^"\'>\s]+)["\']?[^>]*>'
@@ -1249,9 +1248,6 @@ class RedditRSSCollectorService:
             return html_content
         
         try:
-            from bs4 import BeautifulSoup
-            from html import unescape
-            
             # HTML 엔티티 디코딩
             html_content = unescape(html_content)
             
@@ -1363,7 +1359,6 @@ class RedditRSSCollectorService:
         # 수집 작업 로그 생성 (GenericForeignKey 사용)
         job = None
         try:
-            from django.contrib.contenttypes.models import ContentType
             content_type = ContentType.objects.get_for_model(SocialMediaSource)
             job = DataCollectionJob.objects.create(
                 content_type=content_type,
@@ -1379,20 +1374,42 @@ class RedditRSSCollectorService:
         items_error = 0
         
         try:
-            # RSS 피드 파싱
-            feed = feedparser.parse(rss_url)
+            # RSS 피드 파싱 (requests로 직접 다운로드 후 파싱)
+            # Reddit RSS 피드는 User-Agent가 필요하고, feedparser의 request_headers가 
+            # 제대로 작동하지 않을 수 있어 requests를 사용합니다
             
+            # User-Agent 헤더 설정
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            # requests로 RSS 피드 다운로드
+            response = requests.get(rss_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # feedparser로 파싱 (문자열로 전달)
+            feed = feedparser.parse(response.content)
+            
+            # bozo 모드에서도 entries가 있으면 계속 진행
+            # (일부 잘못된 XML 형식이어도 데이터는 파싱될 수 있음)
             if feed.bozo and feed.bozo_exception:
-                error_msg = f"RSS 피드 파싱 오류: {str(feed.bozo_exception)}"
-                self.logger.error(error_msg)
-                return {
-                    'status': 'error',
-                    'source': str(source),
-                    'error_message': error_msg,
-                    'items_collected': 0,
-                    'items_skipped': 0,
-                    'items_error': 0
-                }
+                if feed.entries:
+                    # entries가 있으면 경고만 남기고 계속 진행
+                    self.logger.warning(
+                        f"RSS 피드 파싱 경고 (계속 진행): {str(feed.bozo_exception)}"
+                    )
+                else:
+                    # entries가 없으면 에러 반환
+                    error_msg = f"RSS 피드 파싱 오류: {str(feed.bozo_exception)}"
+                    self.logger.error(error_msg)
+                    return {
+                        'status': 'error',
+                        'source': str(source),
+                        'error_message': error_msg,
+                        'items_collected': 0,
+                        'items_skipped': 0,
+                        'items_error': 0
+                    }
             
             if not feed.entries:
                 self.logger.warning(f"RSS 피드에 항목이 없습니다: {rss_url}")
@@ -1423,7 +1440,6 @@ class RedditRSSCollectorService:
                     if not post_id:
                         # URL에서 추출 시도
                         # 예: https://www.reddit.com/r/technology/comments/1pirwx8/...
-                        import re
                         match = re.search(r'/comments/([^/]+)/', post_url)
                         if match:
                             post_id = f"t3_{match.group(1)}"
@@ -1446,7 +1462,6 @@ class RedditRSSCollectorService:
                             # feedparser가 자동으로 파싱한 datetime 객체 사용
                             published_at = entry.get('published_parsed')
                             if published_at:
-                                from time import struct_time
                                 if isinstance(published_at, struct_time):
                                     published_at = datetime(*published_at[:6])
                                     published_at = timezone.make_aware(published_at)

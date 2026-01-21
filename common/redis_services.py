@@ -1,12 +1,13 @@
 """
 Redis 활용 서비스 모음
 
-이 모듈은 프로젝트에서 사용하는 5가지 주요 Redis 서비스를 제공합니다:
+이 모듈은 프로젝트에서 사용하는 6가지 주요 Redis 서비스를 제공합니다:
 1. 중복 데이터 수집 방지 - 이미 수집한 데이터를 추적하여 중복 방지
 2. 검색 결과 캐싱 - 대시보드 검색 결과를 캐싱하여 성능 향상
 3. 실시간 통계 집계 - 실시간 카운터 및 이벤트 추적
 4. RAG 질의응답 캐싱 - LLM 응답 결과를 캐싱하여 비용 절감
 5. API Rate Limiting - 외부 API 호출 제한 관리
+6. 분석 결과 최신 캐시 - 분석 결과를 빠르게 제공
 
 모든 서비스는 RedisService 기본 클래스를 상속받아 Redis 연결을 공유합니다.
 """
@@ -1073,3 +1074,86 @@ class RateLimitService(RedisService):
             # ttl이 -2이면 키가 존재하지 않음
             # 둘 다 0으로 처리
         }
+
+
+# ============================================
+# 6. 분석 결과 최신 캐시
+# ============================================
+class AnalysisCacheService(RedisService):
+    """
+    분석 결과 최신 캐시 서비스
+    
+    분석 결과를 Redis에 저장하여 대시보드에서 빠르게 조회할 수 있게 합니다.
+    DB에는 이력/요약을 저장하고, Redis에는 최신 결과 전체를 저장하는 하이브리드 구조에 사용됩니다.
+    """
+    
+    def __init__(self):
+        """
+        분석 캐시 서비스 초기화
+        
+        settings.py에서 ANALYSIS_CACHE_TTL_SECONDS 값을 읽어옵니다.
+        기본 TTL은 6시간(21600초)입니다.
+        """
+        super().__init__()
+        self.ANALYSIS_PREFIX = "analysis:latest:"
+        self.CACHE_TTL = int(
+            getattr(settings, 'ANALYSIS_CACHE_TTL_SECONDS', 6 * 3600)
+        )
+    
+    def get_cache_key(
+        self,
+        analysis_type: str,
+        platform: Optional[str] = None,
+        days: Optional[int] = None,
+        parameters: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        분석 파라미터 기반 캐시 키 생성
+        """
+        params = {
+            'analysis_type': analysis_type,
+            'platform': platform,
+            'days': days
+        }
+        if parameters:
+            params.update(parameters)
+        
+        params_str = json.dumps(params, sort_keys=True, default=str)
+        params_hash = hashlib.md5(params_str.encode()).hexdigest()
+        return f"{self.ANALYSIS_PREFIX}{analysis_type}:{params_hash}"
+    
+    def get_latest_result(
+        self,
+        analysis_type: str,
+        platform: Optional[str] = None,
+        days: Optional[int] = None,
+        parameters: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        최신 분석 결과 조회
+        """
+        cache_key = self.get_cache_key(analysis_type, platform, days, parameters)
+        cached = self.client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+        return None
+    
+    def set_latest_result(
+        self,
+        analysis_type: str,
+        result: Dict[str, Any],
+        platform: Optional[str] = None,
+        days: Optional[int] = None,
+        parameters: Optional[Dict[str, Any]] = None,
+        ttl: Optional[int] = None
+    ):
+        """
+        최신 분석 결과 캐싱
+        """
+        cache_key = self.get_cache_key(analysis_type, platform, days, parameters)
+        ttl = ttl or self.CACHE_TTL
+        self.client.setex(
+            cache_key,
+            ttl,
+            json.dumps(result, ensure_ascii=False, default=str)
+        )
