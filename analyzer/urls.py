@@ -1,21 +1,7 @@
-from django.urls import path
 from rest_framework.routers import DefaultRouter
-from .views import (
-    KeywordViewSet,
-    TopicViewSet,
-    TrendAnalysisViewSet,
-    HotKeywordViewSet,
-    analyze_trends
-)
+from .views import TrendAnalysisResultViewSet
 
 router = DefaultRouter()
-# TODO: ViewSet 등록
-# router.register(r'keywords', KeywordViewSet)
-# router.register(r'topics', TopicViewSet)
-# router.register(r'analyses', TrendAnalysisViewSet)
-# router.register(r'hot-keywords', HotKeywordViewSet)
+router.register(r'analysis-results', TrendAnalysisResultViewSet)
 
-urlpatterns = [
-    # TODO: URL 패턴 추가
-    # path('analyze/', analyze_trends, name='analyze_trends'),
-] + router.urls
+urlpatterns = router.urls
