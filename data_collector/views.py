@@ -6,7 +6,7 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
-from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.filters import OrderingFilter
 from django.db.models import QuerySet
 from django.http import HttpResponse
 from django.shortcuts import redirect
@@ -15,20 +15,13 @@ from urllib.parse import unquote
 import requests
 from datetime import timedelta
 from .models import (
-    NewsSource,
-    NewsArticle,
     SocialMediaSource,
-    SocialMediaPost,
     DataCollectionJob,
     CollectionSession
 )
 from .serializers import (
     NewsSourceSerializer,
-    NewsArticleSerializer,
     SocialMediaSourceSerializer,
-    BaseSocialMediaPostSerializer,
-    RedditPostSerializer,
-    DCInsidePostSerializer,
     DataCollectionJobSerializer
 )
 from .tasks import (
@@ -157,97 +150,8 @@ class NewsSourceCreateViewSet(viewsets.ViewSet):
         }, status=status_code)
 
 
-class NewsSourceViewSet(viewsets.ReadOnlyModelViewSet):
-    """뉴스 소스 ViewSet (읽기 전용)"""
-    queryset = NewsSource.objects.all()
-    serializer_class = NewsSourceSerializer
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['publisher', 'category', 'url']
-    ordering_fields = [
-        'publisher', 'category', 'created_at', 'last_collected_at'
-    ]
-    ordering = ['-created_at']
-
-    def get_queryset(self):
-        queryset = NewsSource.objects.all()
-        return filter_queryset_by_params(
-            queryset, self.request,
-            {'is_active': 'bool', 'source_type': 'str'}
-        )
-
-
-class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
-    """뉴스 기사 ViewSet (읽기 전용)"""
-    queryset = NewsArticle.objects.all()
-    serializer_class = NewsArticleSerializer
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['title', 'description', 'author']
-    ordering_fields = ['published_at', 'collected_at', 'title']
-    ordering = ['-published_at', '-collected_at']
-
-    def get_queryset(self):
-        queryset = NewsArticle.objects.all()
-        queryset = filter_queryset_by_params(
-            queryset, self.request,
-            {
-                'source': 'int',
-                'category': 'str',
-                'is_processed': 'bool',
-                'title': 'str',
-                'author': 'str'
-            }
-        )
-        return queryset.select_related('source')
-
-
-class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
-    """소셜 미디어 게시물 ViewSet (읽기 전용)"""
-    queryset = SocialMediaPost.objects.all()
-    serializer_class = BaseSocialMediaPostSerializer  # 기본값
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['title', 'content', 'author']
-    ordering_fields = ['published_at', 'collected_at', 'title']
-    ordering = ['-published_at', '-collected_at']
-    
-    def get_queryset(self):
-        """쿼리셋 필터링"""
-        queryset = SocialMediaPost.objects.all()
-        queryset = filter_queryset_by_params(
-            queryset, self.request,
-            {
-                'source': 'int',
-                'is_processed': 'bool',
-            }
-        )
-        # 플랫폼별 필터링
-        platform = self.request.query_params.get('platform')
-        if platform:
-            queryset = queryset.filter(source__platform=platform)
-        
-        return queryset.select_related('source')
-    
-    def get_serializer_class(self):
-        """플랫폼별로 적절한 시리얼라이저 선택"""
-        # 쿼리 파라미터에서 플랫폼 확인
-        platform = self.request.query_params.get('platform')
-        
-        # 객체가 있는 경우 (detail view)
-        if hasattr(self, 'get_object'):
-            try:
-                obj = self.get_object()
-                if obj and obj.source:
-                    platform = obj.source.platform
-            except Exception:
-                pass
-        
-        # 플랫폼별 시리얼라이저 선택
-        if platform == 'reddit':
-            return RedditPostSerializer
-        elif platform == 'dcinside':
-            return DCInsidePostSerializer
-        else:
-            # 기본 시리얼라이저 (플랫폼이 명시되지 않은 경우)
-            return BaseSocialMediaPostSerializer
+# NewsSourceViewSet, NewsArticleViewSet, SocialMediaPostViewSet는 
+# dashboard/views.py로 이동했습니다.
 
 
 class ThumbnailProxyView(APIView):
@@ -464,27 +368,7 @@ class NewsArticleCollectionViewSet(viewsets.ViewSet):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class SocialMediaSourceViewSet(viewsets.ModelViewSet):
-    """소셜 미디어 소스 ViewSet"""
-    queryset = SocialMediaSource.objects.all()
-    serializer_class = SocialMediaSourceSerializer
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['display_name', 'identifier', 'url', 'category']
-    ordering_fields = [
-        'platform', 'display_name', 'created_at', 'last_collected_at'
-    ]
-    ordering = ['-created_at']
-
-    def get_queryset(self):
-        queryset = SocialMediaSource.objects.all()
-        return filter_queryset_by_params(
-            queryset, self.request,
-            {
-                'is_active': 'bool',
-                'platform': 'str',
-                'source_type': 'str'
-            }
-        )
+# SocialMediaSourceViewSet는 dashboard/views.py로 이동했습니다.
 
 
 class SocialMediaCollectionViewSet(viewsets.ViewSet):

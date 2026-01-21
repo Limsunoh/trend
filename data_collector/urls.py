@@ -3,10 +3,8 @@ from django.urls import path
 from .views import (
     NewsSourceCreateCSVViewSet,
     NewsSourceCreateViewSet,
-    NewsSourceViewSet,
-    NewsArticleViewSet,
-    SocialMediaSourceViewSet,
-    SocialMediaPostViewSet,
+    # NewsSourceViewSet, NewsArticleViewSet, SocialMediaPostViewSet, SocialMediaSourceViewSet는
+    # dashboard/views.py로 이동했습니다.
     DataCollectionJobViewSet,
     NewsArticleCollectionViewSet,
     SocialMediaCollectionViewSet,
@@ -27,10 +25,8 @@ router.register(
     NewsSourceCreateViewSet,
     basename='rss-source-create'
 )
-router.register(r'sources', NewsSourceViewSet, basename='source')
-router.register(r'social-sources', SocialMediaSourceViewSet, basename='social-source')
-router.register(r'news', NewsArticleViewSet, basename='news')
-router.register(r'social', SocialMediaPostViewSet, basename='social')
+# NewsSourceViewSet, NewsArticleViewSet, SocialMediaPostViewSet, SocialMediaSourceViewSet는
+# dashboard/views.py로 이동하여 dashboard/urls.py에 등록되었습니다.
 router.register(r'jobs', DataCollectionJobViewSet, basename='job')
 router.register(
     r'all-collection/trigger',
