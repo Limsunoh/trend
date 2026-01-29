@@ -157,6 +157,15 @@ class NewsArticle(models.Model):
         db_index=True  # 카테고리별 조회를 위한 인덱스
     )
     
+    # 썸네일 이미지 URL
+    thumbnail_url = models.URLField(
+        max_length=1000,
+        blank=True,
+        null=True,
+        verbose_name='썸네일 이미지 URL',
+        help_text='뉴스 기사의 썸네일 이미지 URL'
+    )
+    
     # 발행 시간 (RSS 피드에서 가져온 시간)
     published_at = models.DateTimeField(
         null=True,
