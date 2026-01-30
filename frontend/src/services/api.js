@@ -1,93 +1,41 @@
 import axios from 'axios'
 
-const API_BASE_URL = 'http://localhost:8000/api/dashboard'
+const DASHBOARD_BASE = 'http://localhost:8000/api/dashboard'
+const ANALYZER_BASE = 'http://localhost:8000/api/analyzer'
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+const dashboardApi = axios.create({
+  baseURL: DASHBOARD_BASE,
+  headers: { 'Content-Type': 'application/json' },
 })
 
-// Data Collector APIs
+const analyzerApi = axios.create({
+  baseURL: ANALYZER_BASE,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+// Data Collector APIs (뉴스 기사·소셜 미디어 게시물만)
 export const dataCollectorAPI = {
-  // 뉴스 소스
-  getNewsSources: (params = {}) => {
-    return api.get('/sources/', { params })
-  },
-  getNewsSource: (id) => {
-    return api.get(`/sources/${id}/`)
-  },
-
-  // 뉴스 기사
-  getNewsArticles: (params = {}) => {
-    return api.get('/news/', { params })
-  },
-  getNewsArticle: (id) => {
-    return api.get(`/news/${id}/`)
-  },
-
-  // 소셜 미디어 게시물
-  getSocialPosts: (params = {}) => {
-    return api.get('/social/', { params })
-  },
-  getSocialPost: (id) => {
-    return api.get(`/social/${id}/`)
-  },
-
-  // 소셜 미디어 소스
-  getSocialSources: (params = {}) => {
-    return api.get('/social-sources/', { params })
-  },
-  getSocialSource: (id) => {
-    return api.get(`/social-sources/${id}/`)
-  },
+  getNewsArticles: (params = {}) => dashboardApi.get('/news/', { params }),
+  getNewsArticle: (id) => dashboardApi.get(`/news/${id}/`),
+  getSocialPosts: (params = {}) => dashboardApi.get('/social/', { params }),
+  getSocialPost: (id) => dashboardApi.get(`/social/${id}/`),
 }
 
-// Analyzer APIs
+// Analyzer APIs (api/analyzer/ 기준)
 export const analyzerAPI = {
-  // 전체 분석 결과
-  getAnalysisResults: (params = {}) => {
-    return api.get('/analysis-results/', { params })
-  },
-  getAnalysisResult: (id) => {
-    return api.get(`/analysis-results/${id}/`)
-  },
-
-  // 각 분석 타입별
-  getKeywordsAnalysis: (params = {}) => {
-    return api.get('/analysis/keywords/', { params })
-  },
-  getComparePlatformsAnalysis: (params = {}) => {
-    return api.get('/analysis/compare-platforms/', { params })
-  },
-  getHotKeywordsAnalysis: (params = {}) => {
-    return api.get('/analysis/hot-keywords/', { params })
-  },
-  getTimeLagAnalysis: (params = {}) => {
-    return api.get('/analysis/time-lag/', { params })
-  },
-  getSurgeKeywordsAnalysis: (params = {}) => {
-    return api.get('/analysis/surge-keywords/', { params })
-  },
-  getTrendSynchronizationAnalysis: (params = {}) => {
-    return api.get('/analysis/trend-synchronization/', { params })
-  },
-  getHourlyTrendsAnalysis: (params = {}) => {
-    return api.get('/analysis/hourly-trends/', { params })
-  },
-  getKeywordOccurrenceTimesAnalysis: (params = {}) => {
-    return api.get('/analysis/keyword-occurrence-times/', { params })
-  },
-  getKeywordTimelineAnalysis: (params = {}) => {
-    return api.get('/analysis/keyword-timeline/', { params })
-  },
-  getMultipleKeywordsTimelineAnalysis: (params = {}) => {
-    return api.get('/analysis/multiple-keywords-timeline/', { params })
-  },
-  getEngagementKeywordsAnalysis: (params = {}) => {
-    return api.get('/analysis/engagement-keywords/', { params })
-  },
+  getAnalysisResults: (params = {}) => analyzerApi.get('/analysis-results/', { params }),
+  getAnalysisResult: (id) => analyzerApi.get(`/analysis-results/${id}/`),
+  getKeywordsAnalysis: (params = {}) => analyzerApi.get('/analysis/keywords/', { params }),
+  getComparePlatformsAnalysis: (params = {}) => analyzerApi.get('/analysis/compare-platforms/', { params }),
+  getHotKeywordsAnalysis: (params = {}) => analyzerApi.get('/analysis/hot-keywords/', { params }),
+  getTimeLagAnalysis: (params = {}) => analyzerApi.get('/analysis/time-lag/', { params }),
+  getSurgeKeywordsAnalysis: (params = {}) => analyzerApi.get('/analysis/surge-keywords/', { params }),
+  getTrendSynchronizationAnalysis: (params = {}) => analyzerApi.get('/analysis/trend-synchronization/', { params }),
+  getHourlyTrendsAnalysis: (params = {}) => analyzerApi.get('/analysis/hourly-trends/', { params }),
+  getKeywordOccurrenceTimesAnalysis: (params = {}) => analyzerApi.get('/analysis/keyword-occurrence-times/', { params }),
+  getKeywordTimelineAnalysis: (params = {}) => analyzerApi.get('/analysis/keyword-timeline/', { params }),
+  getMultipleKeywordsTimelineAnalysis: (params = {}) => analyzerApi.get('/analysis/multiple-keywords-timeline/', { params }),
+  getEngagementKeywordsAnalysis: (params = {}) => analyzerApi.get('/analysis/engagement-keywords/', { params }),
 }
 
-export default api
+export default dashboardApi

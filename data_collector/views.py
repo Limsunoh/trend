@@ -6,7 +6,7 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
-from rest_framework.filters import OrderingFilter
+from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import QuerySet
 from django.http import HttpResponse
 from django.shortcuts import redirect
@@ -15,6 +15,7 @@ from urllib.parse import unquote
 import requests
 from datetime import timedelta
 from .models import (
+    NewsSource,
     SocialMediaSource,
     DataCollectionJob,
     CollectionSession
@@ -150,8 +151,50 @@ class NewsSourceCreateViewSet(viewsets.ViewSet):
         }, status=status_code)
 
 
-# NewsSourceViewSet, NewsArticleViewSet, SocialMediaPostViewSet는 
-# dashboard/views.py로 이동했습니다.
+# =============================================================================
+# NewsSource / SocialMediaSource ViewSets (목록·상세 조회)
+# =============================================================================
+
+class NewsSourceViewSet(viewsets.ReadOnlyModelViewSet):
+    """뉴스 소스 ViewSet (읽기 전용)"""
+    queryset = NewsSource.objects.all()
+    serializer_class = NewsSourceSerializer
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['publisher', 'category', 'url']
+    ordering_fields = [
+        'publisher', 'category', 'created_at', 'last_collected_at'
+    ]
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        queryset = NewsSource.objects.all()
+        return filter_queryset_by_params(
+            queryset, self.request,
+            {'is_active': 'bool', 'source_type': 'str'}
+        )
+
+
+class SocialMediaSourceViewSet(viewsets.ReadOnlyModelViewSet):
+    """소셜 미디어 소스 ViewSet (읽기 전용)"""
+    queryset = SocialMediaSource.objects.all()
+    serializer_class = SocialMediaSourceSerializer
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['display_name', 'identifier', 'url', 'category']
+    ordering_fields = [
+        'platform', 'display_name', 'created_at', 'last_collected_at'
+    ]
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        queryset = SocialMediaSource.objects.all()
+        return filter_queryset_by_params(
+            queryset, self.request,
+            {
+                'is_active': 'bool',
+                'platform': 'str',
+                'source_type': 'str'
+            }
+        )
 
 
 class ThumbnailProxyView(APIView):
@@ -366,9 +409,6 @@ class NewsArticleCollectionViewSet(viewsets.ViewSet):
                 'status': 'error',
                 'message': f'수집 작업 시작 실패: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-# SocialMediaSourceViewSet는 dashboard/views.py로 이동했습니다.
 
 
 class SocialMediaCollectionViewSet(viewsets.ViewSet):

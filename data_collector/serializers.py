@@ -240,21 +240,29 @@ class NewsArticleSerializer(serializers.ModelSerializer):
     title_short = serializers.SerializerMethodField(
         help_text='제목 요약 (50자로 제한)',
     )
-    
-    # 발행 시간 형식화
+
+    # 발행 시간 형식화 (한글/로컬 표시용)
     published_at_display = serializers.DateTimeField(
         read_only=True,
         source='published_at',
         format='%Y-%m-%d %H:%M:%S',
         help_text='발행 시간 (형식화된 문자열)'
     )
-    
+
+    # 수집 시간 형식화 (한글/로컬 표시용)
+    collected_at_display = serializers.DateTimeField(
+        read_only=True,
+        source='collected_at',
+        format='%Y-%m-%d %H:%M:%S',
+        help_text='수집 시간 (형식화된 문자열)'
+    )
+
     class Meta:
         """
         Serializer 메타 클래스
         """
         model = NewsArticle
-        
+
         # 모든 필드 포함
         fields = '__all__'
         

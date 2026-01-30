@@ -1,10 +1,10 @@
 from rest_framework.routers import DefaultRouter
 from django.urls import path
 from .views import (
+    NewsSourceViewSet,
+    SocialMediaSourceViewSet,
     NewsSourceCreateCSVViewSet,
     NewsSourceCreateViewSet,
-    # NewsSourceViewSet, NewsArticleViewSet, SocialMediaPostViewSet, SocialMediaSourceViewSet는
-    # dashboard/views.py로 이동했습니다.
     DataCollectionJobViewSet,
     NewsArticleCollectionViewSet,
     SocialMediaCollectionViewSet,
@@ -13,8 +13,12 @@ from .views import (
 )
 
 router = DefaultRouter()
+
+# 뉴스 소스 / 소셜 미디어 소스 (목록·상세 조회)
+router.register(r'sources', NewsSourceViewSet, basename='news-source')
+router.register(r'social-sources', SocialMediaSourceViewSet, basename='social-source')
+
 # ViewSet 등록
-# 각 ViewSet은 자동으로 CRUD 엔드포인트를 생성합니다.
 router.register(
     'news-source-csv',
     NewsSourceCreateCSVViewSet,
@@ -25,8 +29,6 @@ router.register(
     NewsSourceCreateViewSet,
     basename='rss-source-create'
 )
-# NewsSourceViewSet, NewsArticleViewSet, SocialMediaPostViewSet, SocialMediaSourceViewSet는
-# dashboard/views.py로 이동하여 dashboard/urls.py에 등록되었습니다.
 router.register(r'jobs', DataCollectionJobViewSet, basename='job')
 router.register(
     r'all-collection/trigger',

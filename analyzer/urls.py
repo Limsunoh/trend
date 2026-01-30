@@ -1,9 +1,80 @@
-# TrendAnalysisResultViewSet와 각 분석 타입별 ViewSet는
-# dashboard/views.py로 이동하여 dashboard/urls.py에 등록되었습니다.
-
+"""
+분석 결과 API URL 설정
+"""
 from rest_framework.routers import DefaultRouter
+from django.urls import path, include
+from .views import (
+    TrendAnalysisResultViewSet,
+    KeywordsAnalysisViewSet,
+    ComparePlatformsAnalysisViewSet,
+    HotKeywordsAnalysisViewSet,
+    TimeLagAnalysisViewSet,
+    SurgeKeywordsAnalysisViewSet,
+    TrendSynchronizationAnalysisViewSet,
+    HourlyTrendsAnalysisViewSet,
+    KeywordOccurrenceTimesAnalysisViewSet,
+    KeywordTimelineAnalysisViewSet,
+    MultipleKeywordsTimelineAnalysisViewSet,
+    EngagementKeywordsAnalysisViewSet,
+)
 
 router = DefaultRouter()
-# analyzer 앱의 ViewSet은 모두 dashboard로 이동했습니다.
 
-urlpatterns = router.urls
+router.register(
+    r'analysis-results', TrendAnalysisResultViewSet, basename='analysis-result'
+)
+router.register(
+    r'analysis/keywords', KeywordsAnalysisViewSet, basename='keywords-analysis'
+)
+router.register(
+    r'analysis/compare-platforms',
+    ComparePlatformsAnalysisViewSet,
+    basename='compare-platforms-analysis'
+)
+router.register(
+    r'analysis/hot-keywords',
+    HotKeywordsAnalysisViewSet,
+    basename='hot-keywords-analysis'
+)
+router.register(
+    r'analysis/time-lag', TimeLagAnalysisViewSet, basename='time-lag-analysis'
+)
+router.register(
+    r'analysis/surge-keywords',
+    SurgeKeywordsAnalysisViewSet,
+    basename='surge-keywords-analysis'
+)
+router.register(
+    r'analysis/trend-synchronization',
+    TrendSynchronizationAnalysisViewSet,
+    basename='trend-synchronization-analysis'
+)
+router.register(
+    r'analysis/hourly-trends',
+    HourlyTrendsAnalysisViewSet,
+    basename='hourly-trends-analysis'
+)
+router.register(
+    r'analysis/keyword-occurrence-times',
+    KeywordOccurrenceTimesAnalysisViewSet,
+    basename='keyword-occurrence-times-analysis'
+)
+router.register(
+    r'analysis/keyword-timeline',
+    KeywordTimelineAnalysisViewSet,
+    basename='keyword-timeline-analysis'
+)
+router.register(
+    r'analysis/multiple-keywords-timeline',
+    MultipleKeywordsTimelineAnalysisViewSet,
+    basename='multiple-keywords-timeline-analysis'
+)
+router.register(
+    r'analysis/engagement-keywords',
+    EngagementKeywordsAnalysisViewSet,
+    basename='engagement-keywords-analysis'
+)
+
+urlpatterns = [
+    path('', include(router.urls)),
+]

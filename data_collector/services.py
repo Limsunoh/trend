@@ -376,11 +376,13 @@ class RSSCollectorService:
                                 if isinstance(media, dict):
                                     thumbnail_url = media.get('url', '') or media.get('href', '')
                     
-                    # 기사 정보 딕셔너리 생성
+                    # 기사 정보 딕셔너리 생성 (HTML entity decode로 quot;, hellip; 등 → 실제 특수문자)
+                    raw_title = entry.get('title', '') or ''
+                    raw_link = entry.get('link', '') or ''
                     article = {
-                        'title': entry.get('title', '').strip(),  # 제목
-                        'link': entry.get('link', '').strip(),    # URL
-                        'description': description_text,  # 설명 (HTML 태그 제거된 순수 텍스트)
+                        'title': unescape(raw_title.strip()),
+                        'link': unescape(raw_link.strip()),
+                        'description': unescape(description_text) if description_text else '',  # 설명 (HTML 태그 제거된 순수 텍스트)
                         'published': published_time,  # 발행 시간 (datetime 객체)
                         'author': entry.get('author', '').strip() if hasattr(entry, 'author') else '',  # 작성자
                         'category': category,  # 카테고리 (다중 소스 확인)
