@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { analyzerAPI } from '../services/api'
 
 const ANALYSIS_TYPES = [
@@ -16,6 +17,7 @@ const ANALYSIS_TYPES = [
 ]
 
 function AnalyzerSection() {
+  const navigate = useNavigate()
   const [activeAnalysis, setActiveAnalysis] = useState('keywords')
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(false)
@@ -25,7 +27,6 @@ function AnalyzerSection() {
     days: '',
     status: '',
   })
-  const [selectedItem, setSelectedItem] = useState(null)
 
   useEffect(() => {
     loadData()
@@ -34,7 +35,6 @@ function AnalyzerSection() {
   const loadData = async () => {
     setLoading(true)
     setError(null)
-    setSelectedItem(null)
     try {
       const analysisType = ANALYSIS_TYPES.find(t => t.key === activeAnalysis)
       if (!analysisType) return
@@ -55,7 +55,7 @@ function AnalyzerSection() {
   }
 
   const handleItemClick = (item) => {
-    setSelectedItem(item)
+    navigate(`/analysis/${item.id}`)
   }
 
   return (
@@ -111,52 +111,45 @@ function AnalyzerSection() {
             {data.length === 0 ? (
               <div className="loading">분석 결과가 없습니다.</div>
             ) : (
-              <div style={{ display: 'flex', gap: '20px' }}>
-                <div style={{ flex: 1 }}>
-                  <h3 style={{ marginBottom: '10px' }}>분석 결과 목록</h3>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>분석 타입</th>
-                        <th>플랫폼</th>
-                        <th>기간</th>
-                        <th>상태</th>
-                        <th>생성일</th>
+              <>
+                <h3 style={{ marginBottom: '10px' }}>분석 결과 목록 (항목 클릭 시 상세 페이지로 이동)</h3>
+                <table className="table table-list">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>분석 타입</th>
+                      <th>플랫폼</th>
+                      <th>기간</th>
+                      <th>상태</th>
+                      <th>생성일</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.map((item) => (
+                      <tr
+                        key={item.id}
+                        onClick={() => handleItemClick(item)}
+                        className="clickable-row"
+                      >
+                        <td>{item.id}</td>
+                        <td>{item.analysis_type || item.분석_타입}</td>
+                        <td>{item.platform || item.플랫폼 || '-'}</td>
+                        <td>{item.days != null ? `${item.days}일` : '-'}</td>
+                        <td>
+                          <span className={`badge ${item.status === 'success' || item.상태 === 'success' ? 'success' : 'failed'}`}>
+                            {item.status || item.상태 || '-'}
+                          </span>
+                        </td>
+                        <td>
+                          {item.created_at
+                            ? new Date(item.created_at).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })
+                            : (item.생성일 || '-')}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {data.map((item) => (
-                        <tr
-                          key={item.id}
-                          onClick={() => handleItemClick(item)}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <td>{item.id}</td>
-                          <td>{item.analysis_type || item.분석_타입}</td>
-                          <td>{item.platform || item.플랫폼 || '-'}</td>
-                          <td>{item.days || item.기간_일수 || '-'}일</td>
-                          <td>
-                            <span className={`badge ${item.status === 'success' || item.상태 === 'success' ? 'success' : 'failed'}`}>
-                              {item.status || item.상태 || '-'}
-                            </span>
-                          </td>
-                          <td>{item.created_at || item.생성일 || '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {selectedItem && (
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ marginBottom: '10px' }}>상세 결과</h3>
-                    <div className="json-view">
-                      <pre>{JSON.stringify(selectedItem, null, 2)}</pre>
-                    </div>
-                  </div>
-                )}
-              </div>
+                    ))}
+                  </tbody>
+                </table>
+              </>
             )}
           </>
         )}

@@ -1,160 +1,156 @@
-# 실시간 인기/트렌드 분석 대시보드
+# 실시간 트렌드 분석 대시보드
 
-## 문서
-- [트러블슈팅 가이드](TROUBLESHOOTING.md) - 개발 중 발생한 문제와 해결 방법
+뉴스·소셜 미디어 데이터를 수집하고, 키워드·트렌드 분석 결과를 대시보드에서 확인할 수 있는 풀스택 프로젝트입니다.
 
-## 주요 기능 (예정)
-- 뉴스 및 소셜 미디어 데이터 수집 자동화
-- 키워드/토픽 분석과 통계 집계
-- 실시간 트렌드 대시보드 제공
-- RAG 기반 질의응답 시스템
+---
 
-## 기술 스택 (예정)
-- Backend: Django, Django REST Framework
-- Task Queue: Celery, Redis
-- Data Processing: Pandas, scikit-learn, NLTK, KoNLPy
-- Data Collection: BeautifulSoup4, Selenium, Tweepy, Feedparser
-- RAG & Vector DB: ChromaDB, LangChain, Sentence Transformers, OpenAI
-- Visualization: Plotly, Dash
-- Infrastructure: AWS S3 (선택 사항)
+## 목차
+
+- [주요 기능](#주요-기능)
+- [기술 스택](#기술-스택)
+- [프로젝트 구조](#프로젝트-구조)
+- [시작하기](#시작하기)
+- [사용 방법](#사용-방법)
+- [API 문서](#api-문서)
+- [문서](#문서)
+
+---
+
+## 주요 기능
+
+| 구분 | 설명 |
+|------|------|
+| **데이터 수집** | RSS 기반 뉴스 기사 수집, 소셜 미디어 게시물 수집 (Celery 비동기) |
+| **대시보드** | 뉴스/소셜 목록 조회, 검색·정렬·페이지네이션, 상세 페이지 |
+| **트렌드 분석** | 11종 분석(키워드, 플랫폼 비교, 인기/급상승 키워드, 시간차, 동기화, 시간대별, 타임라인, 참여도 등) |
+| **분석 결과** | 분석 타입별 목록 조회, 상세 결과(summary/result_data) 확인 |
+
+---
+
+## 기술 스택
+
+| 영역 | 기술 |
+|------|------|
+| **Backend** | Django 4.2, Django REST Framework |
+| **DB** | PostgreSQL, Redis |
+| **Task Queue** | Celery, Flower(모니터링) |
+| **Frontend** | React 18, Vite, React Router, Axios |
+| **분석/ML** | PyKomoran(KoNLPy), Pandas, scikit-learn |
+| **수집** | Feedparser, BeautifulSoup4, Selenium, Tweepy |
+| **API 문서** | drf-spectacular (Swagger/ReDoc) |
+
+---
+
+## 프로젝트 구조
+
+```
+trend/
+├── trend_analyzer/     # Django 프로젝트 설정
+├── dashboard/          # 대시보드 API (뉴스/소셜 목록)
+├── data_collector/     # 뉴스·소셜 수집, 소스 관리
+├── analyzer/          # 트렌드 분석 로직·API·Celery 태스크
+├── user_qa/            # (추가 모듈)
+├── frontend/           # React + Vite 프론트엔드
+│   └── src/
+│       ├── components/ # Dashboard, DataCollector, Analyzer, 상세 페이지
+│       └── services/   # API 클라이언트
+├── manage.py
+└── requirements.txt
+```
+
+---
+
+## 시작하기
+
+### 요구 사항
+
+- Python 3.10+
+- Node.js 18+ (프론트엔드)
+- PostgreSQL, Redis
+
+### 설치
+
+```bash
+# 저장소 클론 후
+cd trend
+
+# 가상환경 생성 및 활성화
+python -m venv .venv
+source .venv/Scripts/activate   # Windows Git Bash
+# .venv\Scripts\activate        # Windows CMD
+
+# 의존성 설치
+pip install -r requirements.txt
+
+# 환경 변수 설정 (필수)
+# .env 파일을 생성하고 DB, Redis, SECRET_KEY 등 설정 (실행 방법은 .env 하단 참고)
+```
+
+### 프론트엔드
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+**서버 실행, Celery 워커, Flower, 분석 명령어** 등 상세 실행 방법은 **`.env` 파일 맨 아래**에 정리되어 있습니다. (`.env`는 git에 포함되지 않습니다.)
+
+---
 
 ## 사용 방법
 
-### 1. NewsSource 수집
+### 1. 뉴스 소스 로드
 
-뉴스 소스(경향신문, 중앙일보 등)를 CSV 파일에서 로드합니다.
+CSV에서 뉴스 소스(예: 경향신문, 중앙일보)를 DB에 로드합니다.
 
 ```bash
-# 가상환경 활성화
-source .venv/Scripts/activate  # Windows Git Bash
-# 또는
-.venv\Scripts\activate  # Windows CMD
-
-# NewsSource 수집
 python manage.py load_csv_sources
+# 다른 CSV: python manage.py load_csv_sources --csv-file 경로/파일명.csv
 ```
 
-**참고:**
-- 기본 CSV 파일: `NewsSource_RSS.csv`
-- 다른 파일 사용: `python manage.py load_csv_sources --csv-file 경로/파일명.csv`
+### 2. 뉴스·소셜 수집
 
-### 2. NewsArticle 수집
+1. Django 서버와 Celery 워커를 실행합니다. (명령어는 `.env` 하단 참고)
+2. **Swagger** `http://localhost:8000/api/docs/` 에서 `POST /api/collector/trigger/` 호출  
+   - 전체: `{"collect_all": true}`  
+   - 특정 소스: `{"source_id": 1}` 또는 `{"source_name": "경향신문"}`
+3. 수집 상태는 Celery 로그 또는 `GET /api/collector/jobs/` 로 확인합니다.
 
-RSS 피드에서 뉴스 기사를 수집합니다.
-
-#### 2-1. 서버 실행
+### 3. 실패한 RSS 소스 정리
 
 ```bash
-# 가상환경 활성화
-source .venv/Scripts/activate
-
-# Django 서버 실행
-python manage.py runserver
+python manage.py remove_failed_sources --test    # 확인만
+python manage.py remove_failed_sources --confirm # 삭제
+python manage.py remove_failed_sources --confirm --deactivate  # 비활성화
 ```
 
-#### 2-2. Celery 워커 실행
+### 4. 트렌드 분석
 
-새 터미널 창에서:
+- **전체 분석 일괄 실행:** `python manage.py run_all_analyses` (옵션은 `.env` 참고)
+- **대시보드**에서 “분석 결과” 탭으로 이동 후, 분석 타입별 목록·상세 결과를 확인할 수 있습니다.
 
-```bash
-# 가상환경 활성화
-source .venv/Scripts/activate
+---
 
-# Celery 워커 실행 (Windows)
-celery -A trend_analyzer worker --pool=solo --loglevel=info
-```
+## API 문서
 
-#### 2-2-1. Flower로 Celery 모니터링 (선택사항)
+| 문서 | URL |
+|------|-----|
+| Swagger UI | http://localhost:8000/api/docs/ |
+| ReDoc | http://localhost:8000/api/redoc/ |
 
-Celery 작업을 웹 브라우저에서 모니터링할 수 있습니다.
+주요 API prefix:
 
-**설치:**
-```bash
-pip install flower
-```
+- `/api/dashboard/` — 뉴스·소셜 목록 (대시보드용)
+- `/api/collector/` — 수집 트리거, 소스, 작업 목록
+- `/api/analyzer/` — 분석 결과 목록·상세, 분석 타입별 엔드포인트
 
-**실행:**
-```bash
-# 가상환경 활성화
-source .venv/Scripts/activate
+---
 
-# Flower 실행 (로컬 Redis 사용)
-celery -A trend_analyzer flower
+## 문서
 
-# 원격 Redis 사용
-celery -A trend_analyzer flower --broker=redis://121.148.185.46:6379/0
+- [트러블슈팅 가이드](TROUBLESHOOTING.md) — 개발 중 발생한 문제와 해결 방법
 
-# 포트 변경 (기본값: 5555)
-celery -A trend_analyzer flower --port=5555
-```
+---
 
-**웹 브라우저에서 접속:**
-```
-http://localhost:5555
-```
-
-**Flower에서 확인할 수 있는 정보:**
-- **Tasks**: 실행 중/완료/실패한 작업 목록 및 상세 정보
-- **Workers**: 연결된 Celery worker 상태
-- **Monitor**: 실시간 작업 모니터링
-- **Broker**: Redis 연결 상태
-- **API**: REST API 엔드포인트
-
-#### 2-3. API로 수집 시작
-
-**방법: Swagger UI 사용**
-
-1. 브라우저에서 `http://localhost:8000/api/docs/` 접속
-2. `/api/collector/trigger/` 엔드포인트 찾기
-3. POST 요청 실행:
-   - **전체 소스 수집**: `{"collect_all": true}`
-   - **특정 소스 수집**: `{"source_id": 1}` 또는 `{"source_name": "경향신문"}`
-
-```
-
-**수집 상태 확인:**
-
-1. **Celery 워커 터미널 로그 확인**
-   - 작업이 실행 중이면: `[INFO] Task ... received`, `[INFO] RSS 피드 수집 시작` 등의 로그가 계속 출력됨
-   - 작업이 완료되면: `[INFO] Task ... succeeded` 메시지 출력
-   - **모든 작업 완료 확인**: 마지막 작업의 `succeeded` 메시지 후 새로운 로그가 멈추면 완료
-
-2. **Celery 명령어로 확인** (새 터미널에서)
-   ```bash
-   # 가상환경 활성화
-   source .venv/Scripts/activate
-   
-   # 실행 중인 작업 확인
-   celery -A trend_analyzer inspect active
-   # 결과: `- empty -` 이면 모든 작업 완료
-   ```
-
-3. **Swagger/API로 확인**
-   - Swagger: `/api/collector/jobs/` (GET) - 최근 수집 작업 목록 및 상태 확인
-   - 각 작업의 `status` 필드: `completed` (완료), `running` (실행 중), `failed` (실패)
-
-### 3. 실패한 RSS 피드 소스 정리
-
-수집 작업 후 RSS 피드가 작동하지 않는 NewsSource를 찾아 삭제/비활성화합니다.
-
-```bash
-# 가상환경 활성화
-source .venv/Scripts/activate
-
-# 테스트 모드 (삭제하지 않고 확인만)
-python manage.py remove_failed_sources --test
-
-# 실제 삭제
-python manage.py remove_failed_sources --confirm
-
-# 삭제 대신 비활성화
-python manage.py remove_failed_sources --confirm --deactivate
-
-# 최근 N일간의 작업 확인 (기본값: 1일)
-python manage.py remove_failed_sources --test --days 7
-```
-
-**판단 기준:**
-- 최근 수집 작업에서 RSS 피드 파싱 오류가 발생한 소스
-- 최근 수집 작업에서 네트워크 오류가 발생한 소스
-- 최근 수집 작업에서 기사가 0개였고 RSS 피드 테스트도 실패한 소스
+*실행 명령(서버, Celery, Flower, 프론트엔드, 분석 명령 등)은 `.env` 파일 하단에만 정리되어 있으며, git에는 포함되지 않습니다.*
