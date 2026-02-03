@@ -4,13 +4,51 @@
 DB에는 분석 이력과 요약을 저장하고,
 Redis에는 최신 결과를 캐싱하는 하이브리드 구조를 지원합니다.
 """
+import copy
 import json
+import logging
 from datetime import datetime, date, time
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from analyzer.models import TrendAnalysisResult
 from common.redis_services import AnalysisCacheService
+
+# 저장 시 리스트 최대 개수 (news/sns/합계 등 각 리스트당)
+MAX_LIST_ITEMS_STORED = 15
+# analysis_type별 DB 보관 건수 (초과 시 오래된 것 삭제)
+RETENTION_PER_ANALYSIS_TYPE = 50
+
+
+def trim_lists_to_n(obj: Any, n: int = MAX_LIST_ITEMS_STORED) -> Any:
+    """
+    객체를 재귀 순회하며 리스트는 최대 n개만 남김 (DB/응답 크기 절감).
+    news, sns, common_keywords 등 각 리스트에 적용.
+    """
+    if isinstance(obj, dict):
+        return {k: trim_lists_to_n(v, n) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [trim_lists_to_n(item, n) for item in obj[:n]]
+    return obj
+
+
+def _retain_latest_per_analysis_type(analysis_type: str, keep: int = RETENTION_PER_ANALYSIS_TYPE) -> None:
+    """
+    해당 analysis_type의 최신 keep건만 남기고 나머지 행 삭제.
+    """
+    ids_to_keep = list(
+        TrendAnalysisResult.objects.filter(analysis_type=analysis_type)
+        .order_by('-created_at')
+        .values_list('id', flat=True)[:keep]
+    )
+    deleted, _ = TrendAnalysisResult.objects.filter(
+        analysis_type=analysis_type
+    ).exclude(id__in=ids_to_keep).delete()
+    if deleted:
+        logging.getLogger(__name__).info(
+            "Retention: analysis_type=%s, deleted=%s old rows, kept %s",
+            analysis_type, deleted, len(ids_to_keep)
+        )
 
 
 def _json_default(value):
@@ -41,14 +79,20 @@ def store_analysis_result(
     summary: Optional[Dict[str, Any]] = None
 ) -> TrendAnalysisResult:
     """
-    분석 결과를 DB에 저장
+    분석 결과를 DB에 저장.
+    - result/summary 내 리스트는 최대 MAX_LIST_ITEMS_STORED(15)개만 저장.
+    - 저장 후 해당 analysis_type은 최신 RETENTION_PER_ANALYSIS_TYPE(50)건만 유지.
     """
-    # JSONField 저장을 위해 안전 변환 후 DB 저장
-    safe_result = _make_json_safe(result)
+    # 리스트 15개로 자른 뒤 JSON 안전 변환
+    trimmed_result = trim_lists_to_n(copy.deepcopy(result), MAX_LIST_ITEMS_STORED)
+    summary_raw = summary or result.get('summary', {})
+    trimmed_summary = trim_lists_to_n(copy.deepcopy(summary_raw), MAX_LIST_ITEMS_STORED)
+
+    safe_result = _make_json_safe(trimmed_result)
     safe_parameters = _make_json_safe(parameters or {})
-    safe_summary = _make_json_safe(summary or result.get('summary', {}))
-    
-    return TrendAnalysisResult.objects.create(
+    safe_summary = _make_json_safe(trimmed_summary)
+
+    row = TrendAnalysisResult.objects.create(
         analysis_type=analysis_type,
         platform=platform,
         days=days,
@@ -58,6 +102,9 @@ def store_analysis_result(
         summary=safe_summary,
         result_data=safe_result
     )
+    # analysis_type별 최신 50건만 유지
+    _retain_latest_per_analysis_type(analysis_type, RETENTION_PER_ANALYSIS_TYPE)
+    return row
 
 
 def cache_latest_analysis(

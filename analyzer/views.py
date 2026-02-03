@@ -174,17 +174,5 @@ class HourlyTrendsAnalysisViewSet(BaseAnalysisViewSet):
     analysis_type = 'hourly_trends'
 
 
-class KeywordOccurrenceTimesAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'keyword_occurrence_times'
-
-
-class KeywordTimelineAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'keyword_timeline'
-
-
-class MultipleKeywordsTimelineAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'multiple_keywords_timeline'
-
-
 class EngagementKeywordsAnalysisViewSet(BaseAnalysisViewSet):
     analysis_type = 'engagement_keywords'

@@ -90,10 +90,6 @@ class Command(BaseCommand):
             ('급상승 키워드 분석', lambda: tasks.detect_surge_keywords_task.apply(args=[], kwargs={'platform': platform, 'days': days})),
             ('트렌드 동기화 분석', lambda: tasks.analyze_trend_synchronization_task.apply(args=[], kwargs={'days': days})),
             ('시간대별 트렌드 분석', lambda: tasks.analyze_hourly_trends_task.apply(args=[], kwargs={'platform': platform, 'days': days})),
-            ('키워드 등장 시간 분석(뉴스)', lambda: tasks.get_keyword_occurrence_times_task.apply(args=[keyword, 'news', days])),
-            ('키워드 등장 시간 분석(SNS)', lambda: tasks.get_keyword_occurrence_times_task.apply(args=[keyword, 'sns', days])),
-            ('키워드 타임라인 분석', lambda: tasks.get_keyword_timeline_task.apply(args=[keyword], kwargs={'days': days})),
-            ('다중 키워드 타임라인 분석', lambda: tasks.get_multiple_keywords_timeline_task.apply(args=[keywords_list], kwargs={'days': days})),
             ('참여도 기반 키워드 분석', lambda: tasks.analyze_engagement_keywords_task.apply(args=[], kwargs={'days': days})),
         ]
 
@@ -119,10 +115,6 @@ class Command(BaseCommand):
         tasks.detect_surge_keywords_task.delay(platform=platform, days=days)
         tasks.analyze_trend_synchronization_task.delay(days=days)
         tasks.analyze_hourly_trends_task.delay(platform=platform, days=days)
-        tasks.get_keyword_occurrence_times_task.delay(keyword, 'news', days)
-        tasks.get_keyword_occurrence_times_task.delay(keyword, 'sns', days)
-        tasks.get_keyword_timeline_task.delay(keyword, days)
-        tasks.get_multiple_keywords_timeline_task.delay(keywords_list, days)
         tasks.analyze_engagement_keywords_task.delay(days=days)
 
-        self.stdout.write(self.style.SUCCESS('11개 분석 작업이 큐에 등록되었습니다. Celery 워커 로그를 확인하세요.'))
+        self.stdout.write(self.style.SUCCESS('8개 분석 작업이 큐에 등록되었습니다. Celery 워커 로그를 확인하세요.'))
