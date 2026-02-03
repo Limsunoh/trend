@@ -1258,6 +1258,14 @@ def analyze_trend_synchronization(
     
     # 모든 시간대 버킷 합치기
     all_buckets = sorted(set(news_time_buckets.keys()) | set(sns_time_buckets.keys()))
+    # 구간별 표시용 라벨 (예: "1월 20일 0시~6시", "1월 20일 18시~24시")
+    time_bucket_labels = []
+    for b in all_buckets:
+        end_b = b + timedelta(hours=interval_hours)
+        end_hour = 24 if end_b.day != b.day else end_b.hour
+        time_bucket_labels.append(
+            f"{b.month}월 {b.day}일 {b.hour}시~{end_hour}시"
+        )
     
     # 공통 키워드 찾기
     all_news_keywords = set()
@@ -1322,7 +1330,8 @@ def analyze_trend_synchronization(
                 'avg_news_frequency': avg_news_freq,
                 'avg_sns_frequency': avg_sns_freq,
                 'news_sequence': news_sequence,
-                'sns_sequence': sns_sequence
+                'sns_sequence': sns_sequence,
+                'time_bucket_labels': time_bucket_labels
             })
     
     # 상관관계 순으로 정렬

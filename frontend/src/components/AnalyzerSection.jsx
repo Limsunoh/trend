@@ -10,9 +10,6 @@ const ANALYSIS_TYPES = [
   { key: 'surge-keywords', label: '급상승 키워드 분석', api: analyzerAPI.getSurgeKeywordsAnalysis },
   { key: 'trend-synchronization', label: '트렌드 동기화 분석', api: analyzerAPI.getTrendSynchronizationAnalysis },
   { key: 'hourly-trends', label: '시간대별 트렌드 분석', api: analyzerAPI.getHourlyTrendsAnalysis },
-  { key: 'keyword-occurrence-times', label: '키워드 등장 시간 분석', api: analyzerAPI.getKeywordOccurrenceTimesAnalysis },
-  { key: 'keyword-timeline', label: '키워드 타임라인 분석', api: analyzerAPI.getKeywordTimelineAnalysis },
-  { key: 'multiple-keywords-timeline', label: '다중 키워드 타임라인 분석', api: analyzerAPI.getMultipleKeywordsTimelineAnalysis },
   { key: 'engagement-keywords', label: '참여도 기반 키워드 분석', api: analyzerAPI.getEngagementKeywordsAnalysis },
 ]
 
