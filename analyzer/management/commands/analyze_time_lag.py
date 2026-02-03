@@ -4,22 +4,15 @@
 사용법:
     # 최근 7일간 시간차 분석
     python manage.py analyze_time_lag
-    
+
     # 최근 30일간 분석
     python manage.py analyze_time_lag --days 30
-    
+
     # 상위 20개 키워드만 분석
     python manage.py analyze_time_lag --top-n 20
-    
-    # 특정 키워드의 타임라인 분석
-    python manage.py analyze_time_lag --keyword "달러" --timeline
 """
 from django.core.management.base import BaseCommand
-from analyzer.services import (
-    analyze_time_lag,
-    get_keyword_timeline,
-    get_multiple_keywords_timeline
-)
+from analyzer.services import analyze_time_lag
 from datetime import timedelta
 import time
 
@@ -49,51 +42,18 @@ class Command(BaseCommand):
             default=0.001,
             help='최소 상대 빈도 (기본값: 0.001 = 0.1%%)'
         )
-        
-        parser.add_argument(
-            '--keyword',
-            type=str,
-            help='특정 키워드의 타임라인만 분석 (타임라인 모드)'
-        )
-        
-        parser.add_argument(
-            '--timeline',
-            action='store_true',
-            help='타임라인 데이터 생성 (시각화용)'
-        )
-        
-        parser.add_argument(
-            '--interval-hours',
-            type=int,
-            default=6,
-            help='타임라인 시간대별 집계 간격 (시간 단위, 기본값: 6)'
-        )
 
     def handle(self, *args, **options):
         """명령어 실행"""
         days = options['days']
         top_n = options['top_n']
         min_frequency = options['min_frequency']
-        keyword = options.get('keyword')
-        timeline = options.get('timeline', False)
-        interval_hours = options['interval_hours']
         
         self.stdout.write("=" * 80)
         self.stdout.write(self.style.SUCCESS("시간차 분석 시작"))
         self.stdout.write("=" * 80)
         self.stdout.write(f"분석 기간: 최근 {days}일")
         
-        # 특정 키워드 타임라인 분석
-        if keyword:
-            start_time = time.time()
-            self._analyze_keyword_timeline(keyword, days, interval_hours)
-            elapsed_time = time.time() - start_time
-            self.stdout.write(
-                f"\n⏱️  총 실행 시간: {elapsed_time:.2f}초 ({elapsed_time/60:.2f}분)"
-            )
-            return
-        
-        # 시간차 분석 실행
         try:
             start_time = time.time()
             result = analyze_time_lag(
@@ -185,30 +145,6 @@ class Command(BaseCommand):
                                 f"(SNS: {item['sns_first_occurrence'].strftime('%Y-%m-%d %H:%M')}, "
                                 f"뉴스: {item['news_first_occurrence'].strftime('%Y-%m-%d %H:%M')})"
                             )
-            
-            # 타임라인 데이터 생성 (선택적)
-            if timeline and keywords:
-                self.stdout.write("\n[타임라인 데이터 생성]")
-                self.stdout.write("-" * 80)
-                
-                # 상위 키워드들의 타임라인 생성
-                top_keywords = [
-                    k['keyword'] for k in keywords[:10]
-                    if k['direction'] in ['news_to_sns', 'sns_to_news']
-                ]
-                
-                if top_keywords:
-                    timeline_data = get_multiple_keywords_timeline(
-                        top_keywords, days, interval_hours
-                    )
-                    self.stdout.write(
-                        self.style.SUCCESS(
-                            f"✅ {len(top_keywords)}개 키워드의 타임라인 데이터 생성 완료"
-                        )
-                    )
-                    self.stdout.write(
-                        f"   (시각화에 사용 가능: timeline_data['timelines'])"
-                    )
                 
         except Exception as e:
             self.stdout.write(
@@ -221,69 +157,6 @@ class Command(BaseCommand):
         self.stdout.write("=" * 80)
         self.stdout.write(self.style.SUCCESS("분석 완료"))
         self.stdout.write("=" * 80)
-    
-    def _analyze_keyword_timeline(self, keyword: str, days: int, interval_hours: int):
-        """특정 키워드의 타임라인 분석"""
-        self.stdout.write(f"키워드: {keyword}")
-        self.stdout.write("-" * 80)
-        
-        try:
-            start_time = time.time()
-            timeline_data = get_keyword_timeline(
-                keyword, days, interval_hours
-            )
-            elapsed_time = time.time() - start_time
-            
-            self.stdout.write(
-                f"⏱️  타임라인 생성 시간: {elapsed_time:.2f}초 ({elapsed_time/60:.2f}분)"
-            )
-            
-            self.stdout.write(
-                self.style.SUCCESS(f"✅ 타임라인 데이터 생성 완료")
-            )
-            
-            if timeline_data['news_first_occurrence']:
-                self.stdout.write(
-                    f"\n뉴스 최초 등장: {timeline_data['news_first_occurrence']}"
-                )
-            if timeline_data['sns_first_occurrence']:
-                self.stdout.write(
-                    f"SNS 최초 등장: {timeline_data['sns_first_occurrence']}"
-                )
-            
-            self.stdout.write(
-                f"\n시간대별 집계 간격: {interval_hours}시간"
-            )
-            self.stdout.write(f"시간 구간 수: {len(timeline_data['time_labels'])}개")
-            
-            # 타임라인 데이터 요약
-            if timeline_data['time_labels']:
-                self.stdout.write("\n[타임라인 요약]")
-                self.stdout.write("시간대 | 뉴스 | SNS")
-                self.stdout.write("-" * 40)
-                for i, (label, news_count, sns_count) in enumerate(zip(
-                    timeline_data['time_labels'],
-                    timeline_data['news_timeline'],
-                    timeline_data['sns_timeline']
-                )):
-                    if news_count > 0 or sns_count > 0:
-                        self.stdout.write(
-                            f"{label} | {news_count:5d} | {sns_count:5d}"
-                        )
-                        if i >= 20:  # 최대 20개만 표시
-                            self.stdout.write("... (더 많은 데이터 있음)")
-                            break
-            
-        except Exception as e:
-            self.stdout.write(
-                self.style.ERROR(f"❌ 타임라인 분석 실패: {str(e)}")
-            )
-            import traceback
-            self.stdout.write(traceback.format_exc())
-
-
-
-
 
 
 

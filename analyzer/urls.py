@@ -12,9 +12,6 @@ from .views import (
     SurgeKeywordsAnalysisViewSet,
     TrendSynchronizationAnalysisViewSet,
     HourlyTrendsAnalysisViewSet,
-    KeywordOccurrenceTimesAnalysisViewSet,
-    KeywordTimelineAnalysisViewSet,
-    MultipleKeywordsTimelineAnalysisViewSet,
     EngagementKeywordsAnalysisViewSet,
 )
 
@@ -53,21 +50,6 @@ router.register(
     r'analysis/hourly-trends',
     HourlyTrendsAnalysisViewSet,
     basename='hourly-trends-analysis'
-)
-router.register(
-    r'analysis/keyword-occurrence-times',
-    KeywordOccurrenceTimesAnalysisViewSet,
-    basename='keyword-occurrence-times-analysis'
-)
-router.register(
-    r'analysis/keyword-timeline',
-    KeywordTimelineAnalysisViewSet,
-    basename='keyword-timeline-analysis'
-)
-router.register(
-    r'analysis/multiple-keywords-timeline',
-    MultipleKeywordsTimelineAnalysisViewSet,
-    basename='multiple-keywords-timeline-analysis'
 )
 router.register(
     r'analysis/engagement-keywords',
