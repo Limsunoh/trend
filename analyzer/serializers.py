@@ -216,6 +216,7 @@ class TrendAnalysisResultSerializer(serializers.ModelSerializer):
             'timeline': '타임라인',
             'timelines': '타임라인_모음',
             'time_labels': '시간_라벨',
+            'time_bucket_labels': '시간_구간_라벨',
             'common_time_labels': '공통_시간_라벨',
             'timeline_data': '타임라인_데이터',
             'occurrence_count': '등장수',

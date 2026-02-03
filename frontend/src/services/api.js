@@ -32,9 +32,6 @@ export const analyzerAPI = {
   getSurgeKeywordsAnalysis: (params = {}) => analyzerApi.get('/analysis/surge-keywords/', { params }),
   getTrendSynchronizationAnalysis: (params = {}) => analyzerApi.get('/analysis/trend-synchronization/', { params }),
   getHourlyTrendsAnalysis: (params = {}) => analyzerApi.get('/analysis/hourly-trends/', { params }),
-  getKeywordOccurrenceTimesAnalysis: (params = {}) => analyzerApi.get('/analysis/keyword-occurrence-times/', { params }),
-  getKeywordTimelineAnalysis: (params = {}) => analyzerApi.get('/analysis/keyword-timeline/', { params }),
-  getMultipleKeywordsTimelineAnalysis: (params = {}) => analyzerApi.get('/analysis/multiple-keywords-timeline/', { params }),
   getEngagementKeywordsAnalysis: (params = {}) => analyzerApi.get('/analysis/engagement-keywords/', { params }),
 }
 

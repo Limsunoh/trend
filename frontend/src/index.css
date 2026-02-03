@@ -346,6 +346,17 @@ code {
   font-size: 1.35rem;
 }
 
+.analysis-type-description {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  background: #f0f7ff;
+  border-radius: 6px;
+  border-left: 4px solid #3498db;
+  color: #333;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
 .analysis-error-message {
   margin-bottom: 20px;
   padding: 12px;
