@@ -18,6 +18,7 @@ from data_collector.serializers import (
     RedditPostSerializer,
     DCInsidePostSerializer
 )
+from common.rate_limit import ReadAPIThrottle
 
 
 def filter_queryset_by_params(
@@ -55,6 +56,7 @@ class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
     """뉴스 기사 ViewSet (읽기 전용)"""
     queryset = NewsArticle.objects.all()
     serializer_class = NewsArticleSerializer
+    throttle_classes = [ReadAPIThrottle]
     filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['title', 'description', 'author']
     ordering_fields = ['published_at', 'collected_at', 'title', 'source__publisher']
@@ -101,6 +103,7 @@ class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
     """소셜 미디어 게시물 ViewSet (읽기 전용)"""
     queryset = SocialMediaPost.objects.all()
     serializer_class = BaseSocialMediaPostSerializer
+    throttle_classes = [ReadAPIThrottle]
     filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['title', 'content', 'author']
     ordering_fields = ['published_at', 'collected_at', 'title', 'source__display_name']

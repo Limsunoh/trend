@@ -16,6 +16,7 @@ from drf_spectacular.utils import (
 
 from analyzer.models import TrendAnalysisResult
 from analyzer.serializers import TrendAnalysisResultSerializer
+from common.rate_limit import ReadAPIThrottle
 
 
 def _make_aware(value: Optional[datetime]) -> Optional[datetime]:
@@ -59,6 +60,7 @@ class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
     """트렌드 분석 결과 ViewSet (전체 목록 조회용)"""
     queryset = TrendAnalysisResult.objects.all()[:1000]
     serializer_class = TrendAnalysisResultSerializer
+    throttle_classes = [ReadAPIThrottle]
     pagination_class = None
 
     def get_queryset(self):
@@ -113,6 +115,7 @@ class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
     """분석 결과 ViewSet 기본 클래스"""
     queryset = TrendAnalysisResult.objects.all()[:100]
     serializer_class = TrendAnalysisResultSerializer
+    throttle_classes = [ReadAPIThrottle]
     analysis_type = None
     pagination_class = None
 
