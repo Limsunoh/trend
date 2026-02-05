@@ -11,8 +11,11 @@ from drf_spectacular.views import (
     SpectacularRedocView
 )
 
+from common.views import health_view
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/health/', health_view),
     path('api/dashboard/', include('dashboard.urls')),
     path('api/analyzer/', include('analyzer.urls')),
     path('api/collector/', include('data_collector.urls')),
