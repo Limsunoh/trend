@@ -11,6 +11,19 @@ from datetime import timedelta
 # Load environment variables
 load_dotenv(override=True)
 
+# Sentry (에러 수집) - DSN 있으면 초기화
+_sentry_dsn = os.getenv('SENTRY_DSN', '').strip()
+if _sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[DjangoIntegration()],
+        environment=os.getenv('SENTRY_ENVIRONMENT', 'development'),
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -26,6 +39,10 @@ DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS = ['*']
 
+# 보안 헤더 (SecurityMiddleware / XFrameOptionsMiddleware 가 적용)
+SECURE_CONTENT_TYPE_NOSNIFF = True   # X-Content-Type-Options: nosniff
+SECURE_BROWSER_XSS_FILTER = True    # X-XSS-Protection: 1; mode=block
+X_FRAME_OPTIONS = 'DENY'             # X-Frame-Options: DENY
 
 # Application definition
 
@@ -54,6 +71,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'common.middleware.SecurityHeadersMiddleware',  # Referrer-Policy
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
