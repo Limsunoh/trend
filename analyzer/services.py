@@ -5,9 +5,16 @@ from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.utils import timezone
-from PyKomoran import Komoran
 
 from data_collector.models import NewsArticle, SocialMediaPost
+
+try:
+    from PyKomoran import Komoran
+
+    PYKOMORAN_AVAILABLE = True
+except ImportError:
+    Komoran = None  # type: ignore[misc, assignment]
+    PYKOMORAN_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +72,10 @@ class MorphologicalAnalyzer:
                 - Java가 PATH에 없을 때만 지정
                 - 예: "C:\\Program Files\\Java\\jdk-11\\bin\\java.exe"
         """
+        if not PYKOMORAN_AVAILABLE or Komoran is None:
+            raise RuntimeError(
+                "PyKomoran이 설치되지 않았습니다. pip install PyKomoran 및 Java 8+ 필요."
+            )
         # Java 경로 설정 (필요한 경우)
         if java_path and os.path.exists(java_path):
             os.environ["JAVA_HOME"] = os.path.dirname(os.path.dirname(java_path))
@@ -341,6 +352,10 @@ def get_analyzer(
     Returns:
         MorphologicalAnalyzer 인스턴스
     """
+    if not PYKOMORAN_AVAILABLE:
+        raise RuntimeError(
+            "PyKomoran이 설치되지 않았습니다. pip install PyKomoran 및 Java 8+ 필요."
+        )
     # 전역 싱글톤 재사용 (초기화 비용 절감)
     global _analyzer_instance
 
