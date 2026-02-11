@@ -736,106 +736,82 @@ class RAGCacheService(RedisService):
         # TTL 설정: 24시간 (초 단위로 미리 계산)
         self.CACHE_TTL = 24 * 3600  # 86400초 (24시간)
     
-    def get_cache_key(self, query: str) -> str:
+    def get_cache_key(self, query: str, cache_context: Optional[Dict] = None) -> str:
         """
-        쿼리 텍스트를 기반으로 캐시 키 생성
-        
+        쿼리 텍스트와 컨텍스트를 기반으로 캐시 키 생성
+
         동일한 의미의 질문을 동일한 키로 매핑하기 위해:
         1. 소문자로 변환
         2. 앞뒤 공백 제거
-        3. MD5 해시화하여 고정 길이 키 생성
-        
+        3. 컨텍스트 정보 포함 (top_k, include_sources 등)
+        4. MD5 해시화하여 고정 길이 키 생성
+
         Args:
             query: 사용자 질의 텍스트
-            
+            cache_context: 캐시 키에 포함할 컨텍스트 (top_k, include_sources 등)
+
         Returns:
             Redis 캐시 키 (예: "rag:query:a1b2c3d4e5f6...")
-            
-        예시:
-            "오늘 날씨는?" -> "rag:query:abc123..."
-            "오늘  날씨는?  " -> "rag:query:abc123..." (동일한 키)
         """
         # 쿼리 정규화: 소문자 변환 및 공백 제거
-        # 이렇게 하면 "오늘 날씨는?"과 "오늘  날씨는?"이 동일한 키가 됩니다
         normalized = query.lower().strip()
-        
+
+        # 컨텍스트 정보를 캐시 키에 포함
+        # 동일 쿼리라도 top_k, include_sources 등이 다르면 다른 캐시 키 생성
+        if cache_context:
+            context_str = json.dumps(cache_context, sort_keys=True)
+            normalized = f"{normalized}:{context_str}"
+
         # MD5 해시를 사용하여 고정 길이 키 생성
-        # 해시를 사용하는 이유:
-        # 1. 키 길이 제한 해결 (Redis 키는 최대 512MB이지만 실용적으로는 짧게)
-        # 2. 특수문자 문제 해결
-        # 3. 일관된 키 형식 보장
         query_hash = hashlib.md5(normalized.encode()).hexdigest()
-        
+
         return f"{self.CACHE_PREFIX}{query_hash}"
     
-    def get_cached_response(self, query: str) -> Optional[Dict]:
+    def get_cached_response(self, query: str, cache_context: Optional[Dict] = None) -> Optional[Dict]:
         """
         캐시된 답변 조회
-        
+
         Redis에서 해당 쿼리의 캐시된 응답을 조회합니다.
         캐시가 없거나 만료된 경우 None을 반환합니다.
-        
+
         Args:
             query: 사용자 질의 텍스트
-            
+            cache_context: 캐시 키에 포함할 컨텍스트 (top_k, include_sources 등)
+
         Returns:
             캐시된 응답 딕셔너리 또는 None
-            
-        예시:
-            cached = cache_service.get_cached_response("오늘 날씨는?")
-            if cached:
-                return cached['answer']  # 캐시된 답변 사용
         """
-        # 쿼리를 기반으로 캐시 키 생성
-        cache_key = self.get_cache_key(query)
-        
+        # 쿼리와 컨텍스트를 기반으로 캐시 키 생성
+        cache_key = self.get_cache_key(query, cache_context)
+
         # Redis에서 값 조회
-        # GET 명령어는 키가 없거나 만료된 경우 None을 반환
         cached = self.client.get(cache_key)
-        
+
         if cached:
-            # JSON 문자열을 파이썬 딕셔너리로 변환
-            # ensure_ascii=False 옵션으로 한글 등 유니코드 문자 보존
             return json.loads(cached)
-        
-        # 캐시가 없는 경우
+
         return None
     
-    def cache_response(self, query: str, response: Dict, ttl: Optional[int] = None):
+    def cache_response(self, query: str, response: Dict, ttl: Optional[int] = None, cache_context: Optional[Dict] = None):
         """
         RAG 응답 캐싱
-        
+
         LLM으로 생성한 응답을 Redis에 저장합니다.
         SETEX 명령어를 사용하여 키와 함께 TTL(Time To Live)을 설정합니다.
-        
+
         Args:
             query: 사용자 질의 텍스트
             response: LLM 응답 딕셔너리 (예: {'answer': '...', 'sources': [...]})
             ttl: 캐시 유지 시간(초). None이면 기본값(24시간) 사용
-            
-        동작 원리:
-            SETEX key seconds value
-            - key: 캐시 키
-            - seconds: TTL (초 단위)
-            - value: JSON 문자열로 변환된 응답
-            
-        예시:
-            response = {
-                'answer': '오늘 날씨는 맑습니다.',
-                'sources': ['기상청 데이터']
-            }
-            cache_service.cache_response("오늘 날씨는?", response)
+            cache_context: 캐시 키에 포함할 컨텍스트 (top_k, include_sources 등)
         """
-        # 캐시 키 생성
-        cache_key = self.get_cache_key(query)
-        
+        # 캐시 키 생성 (컨텍스트 포함)
+        cache_key = self.get_cache_key(query, cache_context)
+
         # TTL 설정 (지정하지 않으면 기본값 사용)
         ttl = ttl or self.CACHE_TTL
-        
+
         # Redis에 저장
-        # SETEX: SET with EXpiration (만료 시간과 함께 저장)
-        # json.dumps: 딕셔너리를 JSON 문자열로 변환
-        # ensure_ascii=False: 한글 등 유니코드 문자를 그대로 유지
         self.client.setex(
             cache_key,
             ttl,

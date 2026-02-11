@@ -69,3 +69,10 @@ htmlcov/
 # Reports
 reports/
 
+nul
+
+# Vector DB / Chroma
+chroma_db/
+vector_db/
+*.sqlite3
+*.bin
