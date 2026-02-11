@@ -51,7 +51,7 @@ drf-spectacular==0.27.2
 durationpy==0.10
 fastapi==0.121.1
 feedparser==6.0.10
-filelock==3.20.0
+filelock==3.20.3
 Flask==3.0.3
 flatbuffers==25.9.23
 flower==2.0.1
@@ -206,6 +206,7 @@ wsproto==1.2.0
 yarl==1.22.0
 zipp==3.23.0
 pre-commit==4.0.1
+virtualenv>=20.36.1
 # pip-audit for dependency vulnerability check (local + CI)
 pip-audit>=2.10.0
 webdriver-manager
