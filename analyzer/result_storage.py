@@ -4,10 +4,11 @@
 DB에는 분석 이력과 요약을 저장하고,
 Redis에는 최신 결과를 캐싱하는 하이브리드 구조를 지원합니다.
 """
+
 import copy
 import json
 import logging
-from datetime import datetime, date, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -32,22 +33,28 @@ def trim_lists_to_n(obj: Any, n: int = MAX_LIST_ITEMS_STORED) -> Any:
     return obj
 
 
-def _retain_latest_per_analysis_type(analysis_type: str, keep: int = RETENTION_PER_ANALYSIS_TYPE) -> None:
+def _retain_latest_per_analysis_type(
+    analysis_type: str, keep: int = RETENTION_PER_ANALYSIS_TYPE
+) -> None:
     """
     해당 analysis_type의 최신 keep건만 남기고 나머지 행 삭제.
     """
     ids_to_keep = list(
         TrendAnalysisResult.objects.filter(analysis_type=analysis_type)
-        .order_by('-created_at')
-        .values_list('id', flat=True)[:keep]
+        .order_by("-created_at")
+        .values_list("id", flat=True)[:keep]
     )
-    deleted, _ = TrendAnalysisResult.objects.filter(
-        analysis_type=analysis_type
-    ).exclude(id__in=ids_to_keep).delete()
+    deleted, _ = (
+        TrendAnalysisResult.objects.filter(analysis_type=analysis_type)
+        .exclude(id__in=ids_to_keep)
+        .delete()
+    )
     if deleted:
         logging.getLogger(__name__).info(
             "Retention: analysis_type=%s, deleted=%s old rows, kept %s",
-            analysis_type, deleted, len(ids_to_keep)
+            analysis_type,
+            deleted,
+            len(ids_to_keep),
         )
 
 
@@ -74,9 +81,9 @@ def store_analysis_result(
     parameters: Optional[Dict[str, Any]] = None,
     platform: Optional[str] = None,
     days: Optional[int] = None,
-    status: str = 'success',
+    status: str = "success",
     error_message: Optional[str] = None,
-    summary: Optional[Dict[str, Any]] = None
+    summary: Optional[Dict[str, Any]] = None,
 ) -> TrendAnalysisResult:
     """
     분석 결과를 DB에 저장.
@@ -85,7 +92,7 @@ def store_analysis_result(
     """
     # 리스트 15개로 자른 뒤 JSON 안전 변환
     trimmed_result = trim_lists_to_n(copy.deepcopy(result), MAX_LIST_ITEMS_STORED)
-    summary_raw = summary or result.get('summary', {})
+    summary_raw = summary or result.get("summary", {})
     trimmed_summary = trim_lists_to_n(copy.deepcopy(summary_raw), MAX_LIST_ITEMS_STORED)
 
     safe_result = _make_json_safe(trimmed_result)
@@ -100,7 +107,7 @@ def store_analysis_result(
         error_message=error_message,
         parameters=safe_parameters,
         summary=safe_summary,
-        result_data=safe_result
+        result_data=safe_result,
     )
     # analysis_type별 최신 50건만 유지
     _retain_latest_per_analysis_type(analysis_type, RETENTION_PER_ANALYSIS_TYPE)
@@ -113,7 +120,7 @@ def cache_latest_analysis(
     parameters: Optional[Dict[str, Any]] = None,
     platform: Optional[str] = None,
     days: Optional[int] = None,
-    ttl: Optional[int] = None
+    ttl: Optional[int] = None,
 ):
     """
     최신 분석 결과를 Redis에 캐싱
@@ -127,7 +134,7 @@ def cache_latest_analysis(
         platform=platform,
         days=days,
         parameters=parameters,
-        ttl=ttl
+        ttl=ttl,
     )
 
 
@@ -135,7 +142,7 @@ def get_latest_analysis(
     analysis_type: str,
     parameters: Optional[Dict[str, Any]] = None,
     platform: Optional[str] = None,
-    days: Optional[int] = None
+    days: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     최신 분석 결과 조회 (Redis -> DB fallback)
@@ -143,27 +150,22 @@ def get_latest_analysis(
     # 1) Redis 캐시 확인
     cache_service = AnalysisCacheService()
     cached = cache_service.get_latest_result(
-        analysis_type=analysis_type,
-        platform=platform,
-        days=days,
-        parameters=parameters
+        analysis_type=analysis_type, platform=platform, days=days, parameters=parameters
     )
     if cached:
         return cached
-    
+
     # 2) 캐시가 없으면 DB에서 최신 결과 조회
-    queryset = TrendAnalysisResult.objects.filter(
-        analysis_type=analysis_type
-    )
+    queryset = TrendAnalysisResult.objects.filter(analysis_type=analysis_type)
     if platform is not None:
         queryset = queryset.filter(platform=platform)
     if days is not None:
         queryset = queryset.filter(days=days)
-    
-    latest = queryset.order_by('-created_at').first()
+
+    latest = queryset.order_by("-created_at").first()
     if not latest:
         return None
-    
+
     result = latest.result_data
     # 3) 다음 요청을 위해 캐시에 저장
     cache_latest_analysis(
@@ -171,6 +173,6 @@ def get_latest_analysis(
         result=result,
         parameters=parameters,
         platform=platform,
-        days=days
+        days=days,
     )
     return result

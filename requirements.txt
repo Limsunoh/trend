@@ -211,3 +211,6 @@ git+https://github.com/Limsunoh/dcinside-read-api.git
 
 # WebDriver Manager (Selenium ChromeDriver)
 webdriver-manager
+
+# pre-commit (dev: black, isort, flake8 on commit)
+pre-commit==4.0.1

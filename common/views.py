@@ -1,6 +1,7 @@
 """
 공통 HTTP 뷰 (health 등)
 """
+
 from django.http import JsonResponse
 
 from common.health import run_health_checks

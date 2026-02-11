@@ -1,62 +1,64 @@
 """
 분석 결과 API URL 설정
 """
+
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from django.urls import path, include
+
 from .views import (
-    TrendAnalysisResultViewSet,
-    KeywordsAnalysisViewSet,
     ComparePlatformsAnalysisViewSet,
-    HotKeywordsAnalysisViewSet,
-    TimeLagAnalysisViewSet,
-    SurgeKeywordsAnalysisViewSet,
-    TrendSynchronizationAnalysisViewSet,
-    HourlyTrendsAnalysisViewSet,
     EngagementKeywordsAnalysisViewSet,
+    HotKeywordsAnalysisViewSet,
+    HourlyTrendsAnalysisViewSet,
+    KeywordsAnalysisViewSet,
+    SurgeKeywordsAnalysisViewSet,
+    TimeLagAnalysisViewSet,
+    TrendAnalysisResultViewSet,
+    TrendSynchronizationAnalysisViewSet,
 )
 
 router = DefaultRouter()
 
 router.register(
-    r'analysis-results', TrendAnalysisResultViewSet, basename='analysis-result'
+    r"analysis-results", TrendAnalysisResultViewSet, basename="analysis-result"
 )
 router.register(
-    r'analysis/keywords', KeywordsAnalysisViewSet, basename='keywords-analysis'
+    r"analysis/keywords", KeywordsAnalysisViewSet, basename="keywords-analysis"
 )
 router.register(
-    r'analysis/compare-platforms',
+    r"analysis/compare-platforms",
     ComparePlatformsAnalysisViewSet,
-    basename='compare-platforms-analysis'
+    basename="compare-platforms-analysis",
 )
 router.register(
-    r'analysis/hot-keywords',
+    r"analysis/hot-keywords",
     HotKeywordsAnalysisViewSet,
-    basename='hot-keywords-analysis'
+    basename="hot-keywords-analysis",
 )
 router.register(
-    r'analysis/time-lag', TimeLagAnalysisViewSet, basename='time-lag-analysis'
+    r"analysis/time-lag", TimeLagAnalysisViewSet, basename="time-lag-analysis"
 )
 router.register(
-    r'analysis/surge-keywords',
+    r"analysis/surge-keywords",
     SurgeKeywordsAnalysisViewSet,
-    basename='surge-keywords-analysis'
+    basename="surge-keywords-analysis",
 )
 router.register(
-    r'analysis/trend-synchronization',
+    r"analysis/trend-synchronization",
     TrendSynchronizationAnalysisViewSet,
-    basename='trend-synchronization-analysis'
+    basename="trend-synchronization-analysis",
 )
 router.register(
-    r'analysis/hourly-trends',
+    r"analysis/hourly-trends",
     HourlyTrendsAnalysisViewSet,
-    basename='hourly-trends-analysis'
+    basename="hourly-trends-analysis",
 )
 router.register(
-    r'analysis/engagement-keywords',
+    r"analysis/engagement-keywords",
     EngagementKeywordsAnalysisViewSet,
-    basename='engagement-keywords-analysis'
+    basename="engagement-keywords-analysis",
 )
 
 urlpatterns = [
-    path('', include(router.urls)),
+    path("", include(router.urls)),
 ]

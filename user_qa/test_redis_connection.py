@@ -1,7 +1,7 @@
 import redis
 
 try:
-    r = redis.Redis(host='localhost', port=6379, db=0)
+    r = redis.Redis(host="localhost", port=6379, db=0)
     result = r.ping()
     print(f"✅ Redis 연결 성공! 응답: {result}")
 except redis.ConnectionError:

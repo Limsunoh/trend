@@ -1,18 +1,15 @@
 """
 분석 결과 API 뷰 모듈
 """
-from datetime import datetime, time as dt_time
+
+from datetime import datetime
+from datetime import time as dt_time
 from typing import Optional
-from rest_framework import viewsets
-from rest_framework.filters import SearchFilter, OrderingFilter
-from django.db.models import QuerySet
+
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime, parse_date
-from drf_spectacular.utils import (
-    extend_schema,
-    OpenApiParameter,
-    OpenApiTypes
-)
+from django.utils.dateparse import parse_date, parse_datetime
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
+from rest_framework import viewsets
 
 from analyzer.models import TrendAnalysisResult
 from analyzer.serializers import TrendAnalysisResultSerializer
@@ -27,37 +24,35 @@ def _make_aware(value: Optional[datetime]) -> Optional[datetime]:
 
 
 _COMMON_LANG_PARAMETER = OpenApiParameter(
-    name='lang',
+    name="lang",
     type=OpenApiTypes.STR,
-    description='응답 언어 (ko 또는 en, 기본 ko)',
-    required=False
+    description="응답 언어 (ko 또는 en, 기본 ko)",
+    required=False,
 )
 
 _LIST_ANALYSIS_PARAMETERS = [
     _COMMON_LANG_PARAMETER,
     OpenApiParameter(
-        name='platform',
+        name="platform",
         type=OpenApiTypes.STR,
-        description='플랫폼 (news, sns, both)',
-        required=False
+        description="플랫폼 (news, sns, both)",
+        required=False,
     ),
     OpenApiParameter(
-        name='days',
-        type=OpenApiTypes.INT,
-        description='분석 기간 일수',
-        required=False
+        name="days", type=OpenApiTypes.INT, description="분석 기간 일수", required=False
     ),
     OpenApiParameter(
-        name='status',
+        name="status",
         type=OpenApiTypes.STR,
-        description='상태 (success, failed)',
-        required=False
+        description="상태 (success, failed)",
+        required=False,
     ),
 ]
 
 
 class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
     """트렌드 분석 결과 ViewSet (전체 목록 조회용)"""
+
     queryset = TrendAnalysisResult.objects.all()[:1000]
     serializer_class = TrendAnalysisResultSerializer
     throttle_classes = [ReadAPIThrottle]
@@ -67,26 +62,26 @@ class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = TrendAnalysisResult.objects.all()
         params = self.request.query_params
 
-        analysis_type = params.get('analysis_type')
+        analysis_type = params.get("analysis_type")
         if analysis_type:
             queryset = queryset.filter(analysis_type=analysis_type)
 
-        platform = params.get('platform')
+        platform = params.get("platform")
         if platform:
             queryset = queryset.filter(platform=platform)
 
-        days = params.get('days')
+        days = params.get("days")
         if days:
             try:
                 queryset = queryset.filter(days=int(days))
             except ValueError:
                 return queryset.none()
 
-        status_param = params.get('status')
+        status_param = params.get("status")
         if status_param:
             queryset = queryset.filter(status=status_param)
 
-        created_from = params.get('created_from')
+        created_from = params.get("created_from")
         if created_from:
             dt_from = parse_datetime(created_from)
             if dt_from is None:
@@ -97,7 +92,7 @@ class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
             if dt_from:
                 queryset = queryset.filter(created_at__gte=dt_from)
 
-        created_to = params.get('created_to')
+        created_to = params.get("created_to")
         if created_to:
             dt_to = parse_datetime(created_to)
             if dt_to is None:
@@ -113,6 +108,7 @@ class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
 
 class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
     """분석 결과 ViewSet 기본 클래스"""
+
     queryset = TrendAnalysisResult.objects.all()[:100]
     serializer_class = TrendAnalysisResultSerializer
     throttle_classes = [ReadAPIThrottle]
@@ -120,8 +116,8 @@ class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = None
 
     def _parse_url_params(self):
-        platform = self.request.query_params.get('platform', None)
-        days_param = self.request.query_params.get('days')
+        platform = self.request.query_params.get("platform", None)
+        days_param = self.request.query_params.get("days")
         days = None
         if days_param:
             try:
@@ -143,39 +139,39 @@ class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(platform=platform)
         if days is not None:
             queryset = queryset.filter(days=days)
-        status_param = self.request.query_params.get('status')
+        status_param = self.request.query_params.get("status")
         if status_param:
             queryset = queryset.filter(status=status_param)
         return queryset
 
 
 class KeywordsAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'keywords'
+    analysis_type = "keywords"
 
 
 class ComparePlatformsAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'compare_platforms'
+    analysis_type = "compare_platforms"
 
 
 class HotKeywordsAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'hot_keywords'
+    analysis_type = "hot_keywords"
 
 
 class TimeLagAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'time_lag'
+    analysis_type = "time_lag"
 
 
 class SurgeKeywordsAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'surge_keywords'
+    analysis_type = "surge_keywords"
 
 
 class TrendSynchronizationAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'trend_synchronization'
+    analysis_type = "trend_synchronization"
 
 
 class HourlyTrendsAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'hourly_trends'
+    analysis_type = "hourly_trends"
 
 
 class EngagementKeywordsAnalysisViewSet(BaseAnalysisViewSet):
-    analysis_type = 'engagement_keywords'
+    analysis_type = "engagement_keywords"

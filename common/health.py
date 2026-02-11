@@ -3,6 +3,7 @@ Health check: DB, Redis, Celery 상태 확인
 
 /api/health/ 에서 사용. 각 의존성별로 "ok" / "error" 반환.
 """
+
 from django.db import connection
 
 from common.redis_services import RedisService
@@ -35,6 +36,7 @@ def check_celery(timeout: int = 2) -> str:
     """
     try:
         from trend_analyzer.celery import app as celery_app
+
         inspect = celery_app.control.inspect(timeout=timeout)
         result = inspect.ping()
         if result and any(result.values()):
