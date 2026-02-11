@@ -37,11 +37,11 @@ jobs:
 
       - name: pip audit
         run: |
-          pip-audit --skip-vuln PYSEC-2022-252 \
-            --skip-vuln CVE-2025-50182 --skip-vuln CVE-2025-50181 \
-            --skip-vuln CVE-2025-66418 --skip-vuln CVE-2025-66471 --skip-vuln CVE-2026-21441 \
-            --skip-vuln CVE-2025-66221 --skip-vuln CVE-2026-21860
-        # deep-translator, urllib3(kubernetes<2.4), werkzeug(dash<3.1) 취약점은 상위 의존성 제약으로 수정 불가 → skip 후 추후 업그레이드 시 제거
+          pip-audit --ignore-vuln PYSEC-2022-252 \
+            --ignore-vuln CVE-2025-50182 --ignore-vuln CVE-2025-50181 \
+            --ignore-vuln CVE-2025-66418 --ignore-vuln CVE-2025-66471 --ignore-vuln CVE-2026-21441 \
+            --ignore-vuln CVE-2025-66221 --ignore-vuln CVE-2026-21860
+        # deep-translator, urllib3(kubernetes<2.4), werkzeug(dash<3.1) 취약점은 상위 의존성 제약으로 수정 불가 → ignore 후 추후 업그레이드 시 제거
 
   lint:
     runs-on: ubuntu-latest
