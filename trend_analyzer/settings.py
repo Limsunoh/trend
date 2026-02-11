@@ -169,6 +169,14 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
+# ✅ 임베딩 태스크를 전용 큐로 분리 (ChromaDB 동시 쓰기 방지)
+# 임베딩 worker: celery -A trend_analyzer worker --pool=solo --queues=embedding -c 1
+# 수집 worker:   celery -A trend_analyzer worker --pool=prefork --queues=celery -c 4
+CELERY_TASK_ROUTES = {
+    'user_qa.tasks.embed_recent_news_articles_task': {'queue': 'embedding'},
+    'user_qa.tasks.embed_recent_social_posts_task': {'queue': 'embedding'},
+}
+
 # AWS S3 Configuration
 USE_S3 = os.getenv('USE_S3', 'False') == 'True'
 
@@ -226,9 +234,22 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 # RAG & Vector DB Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
+OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
+# gpt-5는 reasoning 토큰이 output에서 차감되므로 충분히 높게 설정
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "1500"))
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
 VECTOR_DB_PATH = os.getenv('VECTOR_DB_PATH', BASE_DIR / 'vector_db')
 CHROMA_PERSIST_DIR = os.getenv('CHROMA_PERSIST_DIR', BASE_DIR / 'chroma_db')
+
+# RAG Quality Gating Thresholds
+# L2² 거리 기준 (정규화 임베딩: L2² = 2*(1-cos_sim))
+# 1.05 → cos_sim 0.475 미만만 차단 (진정한 무관 문서)
+RAG_HARD_DISTANCE_THRESHOLD = float(os.getenv("RAG_HARD_DISTANCE_THRESHOLD", "1.05"))
+# 평균 거리 0.65 초과 → LLM에 "low" 시그널
+RAG_WEAK_RELEVANCE_THRESHOLD = float(os.getenv("RAG_WEAK_RELEVANCE_THRESHOLD", "0.65"))
+RAG_NEWS_DISTANCE_THRESHOLD = float(os.getenv("RAG_NEWS_DISTANCE_THRESHOLD", "0.90"))
+RAG_COMMUNITY_DISTANCE_THRESHOLD = float(os.getenv("RAG_COMMUNITY_DISTANCE_THRESHOLD", "0.90"))
 
 # Logging Configuration
 LOGGING = {
@@ -256,6 +277,11 @@ LOGGING = {
     },
     'loggers': {
         'data_collector': {
+            'handlers': ['console'],
+            'level': 'DEBUG',  # DEBUG 레벨로 설정하여 상세 로그 확인
+            'propagate': False,
+        },
+        'user_qa': {
             'handlers': ['console'],
             'level': 'DEBUG',  # DEBUG 레벨로 설정하여 상세 로그 확인
             'propagate': False,

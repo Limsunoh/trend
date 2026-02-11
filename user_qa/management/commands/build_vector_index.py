@@ -5,31 +5,12 @@ from typing import Dict, List, Any, Optional
 from django.core.management.base import BaseCommand
 
 from user_qa.services import VectorDBService
+from user_qa.tasks import chunk_text
 from data_collector.models import NewsArticle, SocialMediaPost
 
 
 # -------------------------
-# 1) Chunking (텍스트가 길면 잘라서 저장)
-# -------------------------
-def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> List[str]:
-    text = (text or "").strip()
-    if not text:
-        return []
-
-    chunks: List[str] = []
-    start = 0
-    n = len(text)
-    while start < n:
-        end = min(start + chunk_size, n)
-        chunks.append(text[start:end])
-        if end == n:
-            break
-        start = max(0, end - overlap)
-    return chunks
-
-
-# -------------------------
-# 2) 임베딩 텍스트 생성 (임베딩 대상 = title + body/summary)
+# 임베딩 텍스트 생성 (임베딩 대상 = title + body/summary)
 # -------------------------
 def build_embedding_text(title: Optional[str], body: Optional[str]) -> str:
     parts = []
@@ -66,6 +47,13 @@ class Command(BaseCommand):
         parser.add_argument("--limit-social", type=int, default=5000)
         parser.add_argument("--chunk-size", type=int, default=1000)
         parser.add_argument("--overlap", type=int, default=150)
+        parser.add_argument(
+            "--social-platform",
+            type=str,
+            default="all",
+            choices=["all", "reddit", "dcinside"],
+            help="소셜 임베딩 대상 플랫폼 선택 (all/reddit/dcinside)",
+        )
 
     def handle(self, *args, **opts):
         collection = opts["collection"]
@@ -73,24 +61,35 @@ class Command(BaseCommand):
         limit_social = opts["limit_social"]
         chunk_size = opts["chunk_size"]
         overlap = opts["overlap"]
+        social_platform = opts["social_platform"]
 
         vdb = VectorDBService(collection_name=collection)
 
         self.stdout.write(self.style.SUCCESS(f"[VectorDB] collection={collection}"))
-        self.stdout.write(self.style.SUCCESS(f"[Chunk] chunk_size={chunk_size}, overlap={overlap}"))
+        self.stdout.write(
+            self.style.SUCCESS(f"[Chunk] chunk_size={chunk_size}, overlap={overlap}")
+        )
 
         news_count = self._index_news(vdb, limit_news, chunk_size, overlap)
-        social_count = self._index_social(vdb, limit_social, chunk_size, overlap)
+        social_count = self._index_social(vdb, limit_social, chunk_size, overlap, platform_opt=social_platform)
 
-        self.stdout.write(self.style.SUCCESS(f"✅ 완료: news_chunks={news_count}, social_chunks={social_count}"))
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"✅ 완료: news_chunks={news_count}, social_chunks={social_count}"
+            )
+        )
 
     # ---------------------------------------
     # NewsArticle
     # - 임베딩: title + description(요약/본문)
     # - metadata(필터링): category, publisher(뉴스소스), author 등
     # ---------------------------------------
-    def _index_news(self, vdb: VectorDBService, limit: int, chunk_size: int, overlap: int) -> int:
-        qs = NewsArticle.objects.select_related("source").order_by("-published_at")[:limit]
+    def _index_news(
+        self, vdb: VectorDBService, limit: int, chunk_size: int, overlap: int
+    ) -> int:
+        qs = NewsArticle.objects.select_related("source").order_by("-published_at")[
+            :limit
+        ]
 
         ids: List[str] = []
         docs: List[str] = []
@@ -122,17 +121,16 @@ class Command(BaseCommand):
                 raw_meta = {
                     "type": "news",
                     "db_id": int(obj.id),
-                    "source_id": int(obj.source_id) if obj.source_id is not None else None,
+                    "source_id": (
+                        int(obj.source_id) if obj.source_id is not None else None
+                    ),
                     "url": obj.url,
                     "published_at": published_at,
-
                     # ✅ 필터링 핵심
-                    "publisher": publisher,   # ex) 중앙일보, 네이버 등
-                    "category": category,     # ex) 경제/정치/IT 등
-
+                    "publisher": publisher,  # ex) 중앙일보, 네이버 등
+                    "category": category,  # ex) 경제/정치/IT 등
                     # (선택) author로도 필터하고 싶으면 유지
                     "author": obj.author,
-
                     "chunk_index": int(i),
                 }
 
@@ -157,8 +155,14 @@ class Command(BaseCommand):
     # - 임베딩: title + content
     # - metadata(필터링): platform(dcinside/reddit), category(소스 카테고리), author 등
     # ---------------------------------------
-    def _index_social(self, vdb: VectorDBService, limit: int, chunk_size: int, overlap: int) -> int:
-        qs = SocialMediaPost.objects.select_related("source").order_by("-published_at")[:limit]
+    def _index_social(self, vdb: VectorDBService, limit: int, chunk_size: int, overlap: int, platform_opt: str = "all") -> int:
+        qs = SocialMediaPost.objects.select_related("source").order_by("-published_at")
+
+        # ✅ 플랫폼 필터링 (source.platform 기반)
+        if platform_opt and platform_opt != "all":
+            qs = qs.filter(source__platform=platform_opt)
+
+        qs = qs[:limit]
 
         ids: List[str] = []
         docs: List[str] = []
@@ -167,8 +171,23 @@ class Command(BaseCommand):
         total_chunks = 0
 
         for obj in qs:
+            # ✅ 임베딩 텍스트: title + content (+ original_* 선택적으로 합치기)
             title = obj.title
             content = obj.content
+
+            # Reddit 같은 경우 번역본(title/content) + 원문(original_*) 둘 다 보관 중이니까,
+            # 임베딩 품질 올리고 싶으면 함께 넣는 게 보통 유리함
+            if obj.original_title and obj.original_title.strip():
+                title = (title or "").strip()
+                ot = obj.original_title.strip()
+                if ot and ot not in title:
+                    title = f"{title}\n(ORIGINAL) {ot}".strip()
+
+            if obj.original_content and obj.original_content.strip():
+                content = (content or "").strip()
+                oc = obj.original_content.strip()
+                if oc and oc not in content:
+                    content = f"{content}\n\n(ORIGINAL)\n{oc}".strip()
 
             text = build_embedding_text(title, content)
             if not text:
@@ -176,21 +195,18 @@ class Command(BaseCommand):
 
             published_at = obj.published_at.isoformat() if obj.published_at else None
 
-            # ✅ 소셜에서 “중요한 2가지”
-            # - platform: dcinside/reddit
-            # - category: 소셜 카테고리(너 프로젝트에서 source.category)
-            platform = obj.source.platform if obj.source else None
-            category = obj.source.category if obj.source else None
-
-            # 추가로, “어디 소스냐”를 더 좁히고 싶으면 identifier도 같이 메타로 넣는 게 좋음
-            # reddit: subreddit identifier / dcinside: 갤러리 identifier
-            identifier = obj.source.identifier if obj.source else None
-            source_display = obj.source.display_name if obj.source else None
+            # ✅ 소스 기반 필터 메타 (핵심)
+            src_platform = obj.source.platform if obj.source else None
+            src_category = obj.source.category if obj.source else None
+            src_identifier = obj.source.identifier if obj.source else None
+            src_display = obj.source.display_name if obj.source else None
 
             chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
             for i, ch in enumerate(chunks):
                 doc_id = f"social:{obj.id}:{i}"
 
+                # ✅ “검색/필터링/출처 확인”에 필요한 것 위주로 metadata 구성
+                # Chroma metadata는 None 금지라 only_valid_metadata로 정리
                 raw_meta = {
                     "type": "social",
                     "db_id": int(obj.id),
@@ -198,16 +214,23 @@ class Command(BaseCommand):
                     "url": obj.url,
                     "published_at": published_at,
 
-                    # ✅ 필터링 핵심
-                    "platform": platform,   # dcinside / reddit
-                    "category": category,   # 너가 정의한 소셜 카테고리
+                    # 필터링 핵심
+                    "platform": src_platform,     # reddit / dcinside
+                    "category": src_category,
+                    "identifier": src_identifier, # subreddit / gallery
+                    "source_display": src_display,
 
-                    # ✅ 더 세밀한 범위 제한(추천)
-                    "identifier": identifier,          # subreddit / gallery id/name
-                    "source_display": source_display,  # UI 표시용
-
-                    # (선택) author 필터
+                    # 선택: 작성자 필터
                     "author": obj.author,
+
+                    # ✅ 플랫폼 공통 지표(모델에 존재하는 것만 넣기)
+                    "likes_count": getattr(obj, "likes_count", None),
+                    "comments_count": getattr(obj, "comments_count", None),
+                    "views_count": getattr(obj, "views_count", None),
+                    "shares_count": getattr(obj, "shares_count", None),
+
+                    # ✅ DCInside/Reddit 등에서 유용한 원본 식별자
+                    "platform_post_id": obj.platform_post_id,
 
                     "chunk_index": int(i),
                 }
@@ -215,7 +238,6 @@ class Command(BaseCommand):
                 ids.append(doc_id)
                 docs.append(ch)
                 metas.append(only_valid_metadata(raw_meta))
-
                 total_chunks += 1
 
                 if len(docs) >= 512:
@@ -226,3 +248,4 @@ class Command(BaseCommand):
             vdb.upsert_documents(ids=ids, documents=docs, metadatas=metas)
 
         return total_chunks
+
