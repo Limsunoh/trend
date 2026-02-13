@@ -5,23 +5,25 @@ Django settings for trend_analyzer project.
 import os
 from pathlib import Path
 
+import sentry_sdk
 from dotenv import load_dotenv
+from sentry_sdk.integrations.django import DjangoIntegration
+
+from common.sentry_dual_dsn import DualDsnsTransport
 
 # Load environment variables
 load_dotenv(override=True)
 
-# Sentry (에러 수집) - DSN 있으면 초기화
+# Sentry (에러 수집) - DSN 있으면 초기화. 두 번째 DSN 있으면 동일 이벤트를 두 프로젝트로 전송.
 _sentry_dsn = os.getenv("SENTRY_DSN", "").strip()
 if _sentry_dsn:
-    import sentry_sdk
-    from sentry_sdk.integrations.django import DjangoIntegration
-
     sentry_sdk.init(
         dsn=_sentry_dsn,
         integrations=[DjangoIntegration()],
         environment=os.getenv("SENTRY_ENVIRONMENT", "development"),
         traces_sample_rate=0.1,
         send_default_pii=False,
+        transport=DualDsnsTransport,
     )
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
