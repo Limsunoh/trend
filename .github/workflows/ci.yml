@@ -40,7 +40,9 @@ jobs:
           pip-audit --ignore-vuln PYSEC-2022-252 \
             --ignore-vuln CVE-2025-50182 --ignore-vuln CVE-2025-50181 \
             --ignore-vuln CVE-2025-66418 --ignore-vuln CVE-2025-66471 --ignore-vuln CVE-2026-21441 \
-            --ignore-vuln CVE-2025-66221 --ignore-vuln CVE-2026-21860
+            --ignore-vuln CVE-2025-66221 --ignore-vuln CVE-2026-21860 \
+            --ignore-vuln CVE-2026-26013
+        # PYSEC-2022-252: dcinside(git). CVE-2026-26013: langchain-core 0.3.x 사용 중, 수정은 1.2.x → langchain 1.x 전환 시 제거
         # deep-translator, urllib3(kubernetes<2.4), werkzeug(dash<3.1) 취약점은 상위 의존성 제약으로 수정 불가 → ignore 후 추후 업그레이드 시 제거
 
   lint:
