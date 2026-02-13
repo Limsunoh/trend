@@ -5,6 +5,8 @@ Django settings for trend_analyzer project.
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from celery.schedules import crontab
+from datetime import timedelta
 
 # Load environment variables
 load_dotenv(override=True)
@@ -152,6 +154,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = os.getenv('REDIS_PORT', '6379')
 REDIS_DB = os.getenv('REDIS_DB', '0')
+ANALYSIS_CACHE_TTL_SECONDS = int(
+    os.getenv('ANALYSIS_CACHE_TTL_SECONDS', str(6 * 3600))
+)
 
 CACHES = {
     'default': {
@@ -175,6 +180,64 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_TASK_ROUTES = {
     'user_qa.tasks.embed_recent_news_articles_task': {'queue': 'embedding'},
     'user_qa.tasks.embed_recent_social_posts_task': {'queue': 'embedding'},
+}
+
+# Celery Beat Schedule
+# data_collector와 analyzer 태스크를 함께 스케줄링할 수 있습니다.
+# 
+# CELERY_BEAT_SCHEDULE = {
+#     # 데이터 수집 (예: 1시간마다)
+#     'collect-all-news': {
+#         'task': 'data_collector.collect_all_rss_news_task',
+#         'schedule': timedelta(hours=1),
+#     },
+#     'collect-all-social': {
+#         'task': 'data_collector.collect_all_social_media_task',
+#         'schedule': timedelta(hours=1),
+#     },
+#     # 데이터 수집 후 분석 (예: 6시간마다)
+#     'analyze-time-lag': {
+#         'task': 'analyzer.analyze_time_lag_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'detect-surge-keywords': {
+#         'task': 'analyzer.detect_surge_keywords_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'analyze-trend-synchronization': {
+#         'task': 'analyzer.analyze_trend_synchronization_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'analyze-hourly-trends': {
+#         'task': 'analyzer.analyze_hourly_trends_task',
+#         'schedule': timedelta(hours=6),
+#     },
+# }
+
+CELERY_BEAT_SCHEDULE = {
+    # ✅ 안전망: 자동 임베딩 트리거가 실패한 경우를 대비한 주기적 임베딩
+    # check_session_completion에서 이벤트 기반으로 트리거하지만,
+    # 네트워크 오류/워커 다운 등으로 놓친 데이터를 30분마다 소급 처리
+    'embed-unprocessed-news': {
+        'task': 'user_qa.tasks.embed_recent_news_articles_task',
+        'schedule': timedelta(minutes=30),
+        'kwargs': {
+            'since': None,
+            'collection': None,
+            'limit': 5000,
+        },
+        'options': {'queue': 'embedding'},
+    },
+    'embed-unprocessed-social': {
+        'task': 'user_qa.tasks.embed_recent_social_posts_task',
+        'schedule': timedelta(minutes=30),
+        'kwargs': {
+            'since': None,
+            'collection': None,
+            'limit': 5000,
+        },
+        'options': {'queue': 'embedding'},
+    },
 }
 
 # AWS S3 Configuration
@@ -222,6 +285,32 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
     'SCHEMA_PATH_PREFIX': '/api/',
+    # 성능 최적화 옵션
+    'SCHEMA_COERCE_PATH_PK': True,  # PK를 경로에서 자동 변환
+    'SCHEMA_COERCE_METHOD_NAMES': {
+        'retrieve': 'read',
+        'list': 'read',
+    },
+    # 스키마 생성 최적화
+    'DEFAULT_GENERATOR_CLASS': 'drf_spectacular.generators.SchemaGenerator',
+    # 예제 데이터 생성 최소화 (큰 JSON 필드 때문에)
+    'COMPONENT_NO_READ_ONLY_REQUIRED': True,
+    'ENUM_NAME_OVERRIDES': {},
+    # 스키마 생성 시 예제 크기 제한
+    'SCHEMA_PATH_PREFIX_TRIM': False,  # False로 변경: /api/ 접두사 유지
+    # 큰 필드 처리 최적화
+    'OAS_VERSION': '3.0.3',
+    # 예제 데이터 생성 비활성화 (성능 향상)
+    'DISABLE_ERRORS_AND_WARNINGS': True,
+    # 스키마 생성 시 타임아웃 방지
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'basicAuth': {
+                'type': 'http',
+                'scheme': 'basic',
+            }
+        }
+    },
 }
 
 # CORS Settings
@@ -293,4 +382,5 @@ LOGGING = {
         },
     },
 }
+
 

@@ -1,184 +1,157 @@
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from common.redis_services import SearchCacheService, RealtimeStatsService
+"""
+대시보드 API 뷰 모듈
+
+뉴스 기사·소셜 미디어 게시물 목록/상세만 제공합니다.
+뉴스 소스·소셜 미디어 소스 → data_collector 앱
+분석 결과 → analyzer 앱
+"""
+from datetime import datetime
+from rest_framework import viewsets
+from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.pagination import PageNumberPagination
+from django.db.models import QuerySet, Q
+
+from data_collector.models import NewsArticle, SocialMediaPost
+from data_collector.serializers import (
+    NewsArticleSerializer,
+    BaseSocialMediaPostSerializer,
+    RedditPostSerializer,
+    DCInsidePostSerializer
+)
 
 
-@api_view(['GET'])
-def dashboard_overview(request):
-    """
-    대시보드 전체 개요
-    - 우선순위 3: 검색 결과 캐싱
-    """
-    cache_service = SearchCacheService()
-    
-    # 검색 파라미터
-    params = {
-        'view': 'overview',
-        'date_range': request.GET.get('date_range', '7d')
-    }
-    
-    # 캐시 확인
-    cached = cache_service.get_cached_results('dashboard_overview', params)
-    if cached:
-        return Response(cached)
-    
-    # TODO: 실제 데이터 조회
-    data = {
-        'total_articles': 0,
-        'total_keywords': 0,
-        'total_topics': 0,
-        # TODO: 실제 통계 데이터
-    }
-    
-    # 캐싱
-    cache_service.cache_results('dashboard_overview', params, data)
-    
-    return Response(data)
+def filter_queryset_by_params(
+    queryset: QuerySet,
+    request,
+    filters: dict
+) -> QuerySet:
+    """쿼리 파라미터로 쿼리셋 필터링"""
+    for param_name, param_type in filters.items():
+        value = request.query_params.get(param_name, None)
+        if value is not None:
+            try:
+                if param_type == 'bool':
+                    value = value.lower() == 'true'
+                elif param_type == 'int':
+                    value = int(value)
+                queryset = queryset.filter(**{param_name: value})
+            except (ValueError, TypeError):
+                pass
+    return queryset
 
 
-@api_view(['GET'])
-def trending_keywords(request):
-    """
-    인기 키워드 목록
-    - 우선순위 3: 검색 결과 캐싱
-    """
-    cache_service = SearchCacheService()
-    
-    # 검색 파라미터
-    params = {
-        'limit': request.GET.get('limit', 100),
-        'date_from': request.GET.get('date_from'),
-        'date_to': request.GET.get('date_to'),
-        'sort': request.GET.get('sort', 'score')
-    }
-    
-    # 캐시 확인
-    cached = cache_service.get_cached_results('trending_keywords', params)
-    if cached:
-        return Response(cached)
-    
-    # TODO: 실제 키워드 조회
-    keywords = []  # TODO: DB 또는 Redis에서 조회
-    
-    data = {
-        'keywords': keywords,
-        'total': len(keywords)
-    }
-    
-    # 캐싱
-    cache_service.cache_results('trending_keywords', params, data)
-    
-    return Response(data)
+class DashboardPageNumberPagination(PageNumberPagination):
+    """대시보드 목록용 페이지네이션 (한 페이지 50개)"""
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
-@api_view(['GET'])
-def trending_topics(request):
-    """
-    인기 토픽 목록
-    - 우선순위 3: 검색 결과 캐싱
-    """
-    cache_service = SearchCacheService()
-    
-    params = {
-        'limit': request.GET.get('limit', 50),
-        'date_from': request.GET.get('date_from'),
-        'date_to': request.GET.get('date_to')
-    }
-    
-    # 캐시 확인
-    cached = cache_service.get_cached_results('trending_topics', params)
-    if cached:
-        return Response(cached)
-    
-    # TODO: 실제 토픽 조회
-    topics = []  # TODO: DB 또는 Redis에서 조회
-    
-    data = {
-        'topics': topics,
-        'total': len(topics)
-    }
-    
-    # 캐싱
-    cache_service.cache_results('trending_topics', params, data)
-    
-    return Response(data)
+# =============================================================================
+# 뉴스 기사 / 소셜 미디어 게시물 (목록·상세)
+# =============================================================================
+
+class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
+    """뉴스 기사 ViewSet (읽기 전용)"""
+    queryset = NewsArticle.objects.all()
+    serializer_class = NewsArticleSerializer
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['title', 'description', 'author']
+    ordering_fields = ['published_at', 'collected_at', 'title', 'source__publisher']
+    ordering = ['-collected_at']
+    pagination_class = DashboardPageNumberPagination
+
+    def get_queryset(self):
+        queryset = NewsArticle.objects.all()
+        queryset = filter_queryset_by_params(
+            queryset, self.request,
+            {'source': 'int', 'author': 'str'}
+        )
+        # 드롭다운 검색: search_field + search
+        search_field = self.request.query_params.get('search_field')
+        search_value = (self.request.query_params.get('search') or '').strip()
+        if search_field and search_value:
+            if search_field == 'category':
+                queryset = queryset.filter(category__icontains=search_value)
+            elif search_field == 'title':
+                queryset = queryset.filter(title__icontains=search_value)
+            elif search_field == 'source':
+                # 신문사: publisher, category, url 모두 부분 일치
+                queryset = queryset.filter(
+                    Q(source__publisher__icontains=search_value) |
+                    Q(source__category__icontains=search_value) |
+                    Q(source__url__icontains=search_value)
+                )
+            elif search_field == 'published_at':
+                try:
+                    dt = datetime.strptime(search_value, '%Y-%m-%d').date()
+                    queryset = queryset.filter(published_at__date=dt)
+                except ValueError:
+                    pass
+            elif search_field == 'collected_at':
+                try:
+                    dt = datetime.strptime(search_value, '%Y-%m-%d').date()
+                    queryset = queryset.filter(collected_at__date=dt)
+                except ValueError:
+                    pass
+        return queryset.select_related('source')
 
 
-@api_view(['GET'])
-def realtime_stats(request):
-    """
-    실시간 통계
-    - 우선순위 5: 실시간 통계 집계
-    """
-    stats_service = RealtimeStatsService()
-    
-    # 실시간 통계 조회
-    data = {
-        'articles_collected_today': stats_service.get_counter('articles_collected'),
-        'articles_collected_hourly': stats_service.get_hourly_stats('articles_collected'),
-        'recent_events': stats_service.get_recent_events('article_collected', limit=10),
-        # TODO: 추가 통계
-    }
-    
-    return Response(data)
+class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
+    """소셜 미디어 게시물 ViewSet (읽기 전용)"""
+    queryset = SocialMediaPost.objects.all()
+    serializer_class = BaseSocialMediaPostSerializer
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['title', 'content', 'author']
+    ordering_fields = ['published_at', 'collected_at', 'title', 'source__display_name']
+    ordering = ['-collected_at']
+    pagination_class = DashboardPageNumberPagination
 
+    def get_queryset(self):
+        queryset = SocialMediaPost.objects.all()
+        queryset = filter_queryset_by_params(
+            queryset, self.request,
+            {'source': 'int', 'is_processed': 'bool'}
+        )
+        platform = self.request.query_params.get('platform')
+        if platform:
+            queryset = queryset.filter(source__platform=platform)
+        # 드롭다운 검색: search_field + search
+        search_field = self.request.query_params.get('search_field')
+        search_value = (self.request.query_params.get('search') or '').strip()
+        if search_field and search_value:
+            if search_field == 'title':
+                queryset = queryset.filter(title__icontains=search_value)
+            elif search_field == 'source':
+                queryset = queryset.filter(
+                    Q(source__display_name__icontains=search_value) |
+                    Q(source__identifier__icontains=search_value)
+                )
+            elif search_field == 'published_at':
+                try:
+                    dt = datetime.strptime(search_value, '%Y-%m-%d').date()
+                    queryset = queryset.filter(published_at__date=dt)
+                except ValueError:
+                    pass
+            elif search_field == 'collected_at':
+                try:
+                    dt = datetime.strptime(search_value, '%Y-%m-%d').date()
+                    queryset = queryset.filter(collected_at__date=dt)
+                except ValueError:
+                    pass
+        return queryset.select_related('source')
 
-@api_view(['GET'])
-def keyword_detail(request, keyword_id):
-    """
-    키워드 상세 정보
-    - 우선순위 3: 검색 결과 캐싱
-    """
-    cache_service = SearchCacheService()
-    
-    params = {
-        'keyword_id': keyword_id,
-        'include_history': request.GET.get('include_history', 'false')
-    }
-    
-    # 캐시 확인
-    cached = cache_service.get_cached_results('keyword_detail', params)
-    if cached:
-        return Response(cached)
-    
-    # TODO: 실제 키워드 상세 정보 조회
-    data = {
-        'keyword': {},  # TODO: 키워드 정보
-        'history': [],  # TODO: 히스토리
-        'related_keywords': []  # TODO: 관련 키워드
-    }
-    
-    # 캐싱
-    cache_service.cache_results('keyword_detail', params, data)
-    
-    return Response(data)
-
-
-@api_view(['GET'])
-def topic_detail(request, topic_id):
-    """
-    토픽 상세 정보
-    - 우선순위 3: 검색 결과 캐싱
-    """
-    cache_service = SearchCacheService()
-    
-    params = {
-        'topic_id': topic_id,
-        'include_keywords': request.GET.get('include_keywords', 'true')
-    }
-    
-    # 캐시 확인
-    cached = cache_service.get_cached_results('topic_detail', params)
-    if cached:
-        return Response(cached)
-    
-    # TODO: 실제 토픽 상세 정보 조회
-    data = {
-        'topic': {},  # TODO: 토픽 정보
-        'keywords': []  # TODO: 관련 키워드
-    }
-    
-    # 캐싱
-    cache_service.cache_results('topic_detail', params, data)
-    
-    return Response(data)
+    def get_serializer_class(self):
+        platform = self.request.query_params.get('platform')
+        if hasattr(self, 'get_object'):
+            try:
+                obj = self.get_object()
+                if obj and obj.source:
+                    platform = obj.source.platform
+            except Exception:
+                pass
+        if platform == 'reddit':
+            return RedditPostSerializer
+        if platform == 'dcinside':
+            return DCInsidePostSerializer
+        return BaseSocialMediaPostSerializer

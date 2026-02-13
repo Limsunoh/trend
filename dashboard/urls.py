@@ -1,19 +1,16 @@
-from django.urls import path
-from .views import (
-    dashboard_overview,
-    trending_keywords,
-    trending_topics,
-    realtime_stats,
-    keyword_detail,
-    topic_detail
-)
+"""
+대시보드 API URL 설정
+
+뉴스 기사·소셜 미디어 게시물만 등록합니다.
+"""
+from rest_framework.routers import DefaultRouter
+from django.urls import path, include
+from .views import NewsArticleViewSet, SocialMediaPostViewSet
+
+router = DefaultRouter()
+router.register(r'news', NewsArticleViewSet, basename='news-article')
+router.register(r'social', SocialMediaPostViewSet, basename='social-post')
 
 urlpatterns = [
-    path('overview/', dashboard_overview, name='dashboard_overview'),
-    path('trending/keywords/', trending_keywords, name='trending_keywords'),
-    path('trending/topics/', trending_topics, name='trending_topics'),
-    path('realtime/stats/', realtime_stats, name='realtime_stats'),
-    path('keywords/<int:keyword_id>/', keyword_detail, name='keyword_detail'),
-    path('topics/<int:topic_id>/', topic_detail, name='topic_detail'),
+    path('', include(router.urls)),
 ]
-

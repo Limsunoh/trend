@@ -11,23 +11,18 @@ from django.db.models import QuerySet
 from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.utils import timezone
+from urllib.parse import unquote
 import requests
 from datetime import timedelta
 from .models import (
     NewsSource,
-    NewsArticle,
     SocialMediaSource,
-    SocialMediaPost,
     DataCollectionJob,
     CollectionSession
 )
 from .serializers import (
     NewsSourceSerializer,
-    NewsArticleSerializer,
     SocialMediaSourceSerializer,
-    BaseSocialMediaPostSerializer,
-    RedditPostSerializer,
-    DCInsidePostSerializer,
     DataCollectionJobSerializer
 )
 from .tasks import (
@@ -156,6 +151,10 @@ class NewsSourceCreateViewSet(viewsets.ViewSet):
         }, status=status_code)
 
 
+# =============================================================================
+# NewsSource / SocialMediaSource ViewSets (목록·상세 조회)
+# =============================================================================
+
 class NewsSourceViewSet(viewsets.ReadOnlyModelViewSet):
     """뉴스 소스 ViewSet (읽기 전용)"""
     queryset = NewsSource.objects.all()
@@ -175,78 +174,27 @@ class NewsSourceViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
 
-class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
-    """뉴스 기사 ViewSet (읽기 전용)"""
-    queryset = NewsArticle.objects.all()
-    serializer_class = NewsArticleSerializer
+class SocialMediaSourceViewSet(viewsets.ReadOnlyModelViewSet):
+    """소셜 미디어 소스 ViewSet (읽기 전용)"""
+    queryset = SocialMediaSource.objects.all()
+    serializer_class = SocialMediaSourceSerializer
     filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['title', 'description', 'author']
-    ordering_fields = ['published_at', 'collected_at', 'title']
-    ordering = ['-published_at', '-collected_at']
+    search_fields = ['display_name', 'identifier', 'url', 'category']
+    ordering_fields = [
+        'platform', 'display_name', 'created_at', 'last_collected_at'
+    ]
+    ordering = ['-created_at']
 
     def get_queryset(self):
-        queryset = NewsArticle.objects.all()
-        queryset = filter_queryset_by_params(
+        queryset = SocialMediaSource.objects.all()
+        return filter_queryset_by_params(
             queryset, self.request,
             {
-                'source': 'int',
-                'category': 'str',
-                'is_processed': 'bool',
-                'title': 'str',
-                'author': 'str'
+                'is_active': 'bool',
+                'platform': 'str',
+                'source_type': 'str'
             }
         )
-        return queryset.select_related('source')
-
-
-class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
-    """소셜 미디어 게시물 ViewSet (읽기 전용)"""
-    queryset = SocialMediaPost.objects.all()
-    serializer_class = BaseSocialMediaPostSerializer  # 기본값
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['title', 'content', 'author']
-    ordering_fields = ['published_at', 'collected_at', 'title']
-    ordering = ['-published_at', '-collected_at']
-    
-    def get_queryset(self):
-        """쿼리셋 필터링"""
-        queryset = SocialMediaPost.objects.all()
-        queryset = filter_queryset_by_params(
-            queryset, self.request,
-            {
-                'source': 'int',
-                'is_processed': 'bool',
-            }
-        )
-        # 플랫폼별 필터링
-        platform = self.request.query_params.get('platform')
-        if platform:
-            queryset = queryset.filter(source__platform=platform)
-        
-        return queryset.select_related('source')
-    
-    def get_serializer_class(self):
-        """플랫폼별로 적절한 시리얼라이저 선택"""
-        # 쿼리 파라미터에서 플랫폼 확인
-        platform = self.request.query_params.get('platform')
-        
-        # 객체가 있는 경우 (detail view)
-        if hasattr(self, 'get_object'):
-            try:
-                obj = self.get_object()
-                if obj and obj.source:
-                    platform = obj.source.platform
-            except Exception:
-                pass
-        
-        # 플랫폼별 시리얼라이저 선택
-        if platform == 'reddit':
-            return RedditPostSerializer
-        elif platform == 'dcinside':
-            return DCInsidePostSerializer
-        else:
-            # 기본 시리얼라이저 (플랫폼이 명시되지 않은 경우)
-            return BaseSocialMediaPostSerializer
 
 
 class ThumbnailProxyView(APIView):
@@ -274,8 +222,6 @@ class ThumbnailProxyView(APIView):
             )
         
         try:
-            from urllib.parse import unquote
-            
             # URL 디코딩
             image_url = unquote(image_url)
             
@@ -418,10 +364,6 @@ class NewsArticleCollectionViewSet(viewsets.ViewSet):
         모든 활성화된 뉴스 소스에서 수집 작업 시작
         중복 실행 방지: 최근 5분 이내에 실행 중인 세션이 있으면 새로 시작하지 않습니다.
         """
-        from datetime import timedelta
-        from django.utils import timezone
-        from .models import CollectionSession
-        
         # 중복 실행 방지: 최근 5분 이내에 실행 중인 News 세션이 있는지 확인
         recent_time = timezone.now() - timedelta(minutes=5)
         running_sessions = CollectionSession.objects.filter(
@@ -467,29 +409,6 @@ class NewsArticleCollectionViewSet(viewsets.ViewSet):
                 'status': 'error',
                 'message': f'수집 작업 시작 실패: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-class SocialMediaSourceViewSet(viewsets.ModelViewSet):
-    """소셜 미디어 소스 ViewSet"""
-    queryset = SocialMediaSource.objects.all()
-    serializer_class = SocialMediaSourceSerializer
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['display_name', 'identifier', 'url', 'category']
-    ordering_fields = [
-        'platform', 'display_name', 'created_at', 'last_collected_at'
-    ]
-    ordering = ['-created_at']
-
-    def get_queryset(self):
-        queryset = SocialMediaSource.objects.all()
-        return filter_queryset_by_params(
-            queryset, self.request,
-            {
-                'is_active': 'bool',
-                'platform': 'str',
-                'source_type': 'str'
-            }
-        )
 
 
 class SocialMediaCollectionViewSet(viewsets.ViewSet):

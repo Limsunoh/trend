@@ -5,17 +5,28 @@
 클래스 기반 구조로 여러 뉴스 소스를 일관되게 처리할 수 있습니다.
 """
 import logging
+import os
+import csv
+import re
+import requests
 import feedparser
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from urllib.parse import urlparse
+from html import unescape
+from time import mktime, struct_time
 from django.utils import timezone
+from django.conf import settings
+from django.db import transaction
+from django.contrib.contenttypes.models import ContentType
+from bs4 import BeautifulSoup
 from common.redis_services import (
     DuplicatePreventionService,
     RateLimitService,
     RealtimeStatsService
 )
 from .models import NewsSource, NewsArticle, DataCollectionJob, SocialMediaSource, SocialMediaPost
+from .serializers import NewsSourceSerializer
 from .translation_service import translation_service
 
 # DC Inside 수집을 위한 라이브러리
@@ -25,6 +36,28 @@ from dcapi.read.title_selenium import main as selenium_title
 # 로거 설정
 logger = logging.getLogger(__name__)
 
+"""
+이 모듈은 다양한 소스에서 데이터를 수집하는 서비스 클래스들을 제공합니다.
+
+주요 클래스 및 기능:
+1. RSSCollectorService: RSS 피드 수집 서비스
+   - parse_feed(): RSS 피드 파싱
+   - collect_from_source(): 특정 소스에서 기사 수집
+   - collect(): 소스 ID/이름으로 수집
+   - create_source_from_rss(): RSS URL로 소스 생성
+
+2. NewsSourceCSVService: CSV 파일에서 뉴스 소스 일괄 생성
+   - load_sources_from_csv(): CSV 파일에서 NewsSource 생성/업데이트
+
+3. DCInsideCollectorService: DC Inside 갤러리 수집 서비스
+   - collect_from_source(): DC Inside 갤러리에서 게시글 수집
+
+4. RedditRSSCollectorService: Reddit RSS 피드 수집 서비스
+   - collect_from_source(): Reddit RSS 피드에서 게시글 수집
+   - _extract_reddit_content(): Reddit HTML에서 실제 내용 추출
+
+모든 서비스는 중복 방지, Rate Limiting, 실시간 통계 집계 등의 기능을 제공합니다.
+"""
 
 class RSSCollectorService:
     """
@@ -57,14 +90,224 @@ class RSSCollectorService:
         
         Redis 서비스들을 초기화하고 로거를 설정합니다.
         """
-        # Redis 서비스 초기화
-        # 중복 방지, Rate Limiting, 통계 집계를 위한 서비스들
         self.duplicate_check = DuplicatePreventionService()
         self.rate_limit = RateLimitService()
         self.stats = RealtimeStatsService()
-        
-        # 로거 설정
         self.logger = logging.getLogger(__name__)
+    
+    def _extract_text_from_html(self, html_content: str) -> str:
+        """
+        HTML 콘텐츠에서 순수 텍스트만 추출
+        
+        Args:
+            html_content: HTML 형식의 문자열
+            
+        Returns:
+            HTML 태그가 제거된 순수 텍스트
+        """
+        if not html_content or not html_content.strip():
+            return ''
+        
+        try:
+            # HTML 엔티티 디코딩
+            html_content = unescape(html_content)
+            
+            # BeautifulSoup으로 파싱하여 텍스트만 추출
+            soup = BeautifulSoup(html_content, 'html.parser')
+            text = soup.get_text(separator=' ', strip=True)
+            
+            # 연속된 공백 제거
+            text = re.sub(r'\s+', ' ', text).strip()
+            
+            return text
+        except Exception as e:
+            # BeautifulSoup 실패 시 간단한 정규식으로 HTML 태그 제거
+            self.logger.warning(f"HTML 파싱 실패, 정규식으로 대체: {str(e)}")
+            text = re.sub(r'<[^>]+>', '', html_content)
+            text = unescape(text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text
+    
+    def _extract_image_from_html(self, html_content: str) -> Optional[str]:
+        """
+        HTML 콘텐츠에서 첫 번째 이미지 URL 추출
+        
+        Args:
+            html_content: HTML 형식의 문자열
+            
+        Returns:
+            이미지 URL 또는 None
+        """
+        if not html_content or not html_content.strip():
+            return None
+        
+        try:
+            # HTML 엔티티 디코딩
+            html_content = unescape(html_content)
+            
+            # BeautifulSoup으로 파싱하여 이미지 태그 찾기
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # <img> 태그에서 src 추출
+            img_tag = soup.find('img')
+            if img_tag and img_tag.get('src'):
+                img_url = img_tag.get('src')
+                # 상대 URL을 절대 URL로 변환 (필요시)
+                if img_url.startswith('//'):
+                    img_url = 'https:' + img_url
+                elif img_url.startswith('/'):
+                    # 절대 경로인 경우 원본 URL의 도메인을 붙여야 하지만,
+                    # 여기서는 그대로 반환 (나중에 필요시 처리)
+                    pass
+                return img_url.strip()
+            
+            # <img> 태그가 없으면 정규식으로 찾기
+            img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
+            match = re.search(img_pattern, html_content, re.IGNORECASE)
+            if match:
+                img_url = match.group(1)
+                if img_url.startswith('//'):
+                    img_url = 'https:' + img_url
+                return img_url.strip()
+            
+            return None
+        except Exception as e:
+            self.logger.warning(f"이미지 추출 실패: {str(e)}")
+            return None
+    
+    def _get_description_from_entry(self, entry) -> Tuple[str, Optional[str]]:
+        """
+        RSS entry에서 description 추출 (다중 소스 확인)
+        
+        Args:
+            entry: feedparser entry 객체
+            
+        Returns:
+            (description_text, thumbnail_url) 튜플
+        """
+        # 다중 소스에서 description 찾기
+        raw_description = None
+        if hasattr(entry, 'description') and entry.description:
+            raw_description = entry.description
+        elif hasattr(entry, 'summary') and entry.summary:
+            raw_description = entry.summary
+        elif hasattr(entry, 'content') and entry.content:
+            # content는 리스트일 수 있음
+            if isinstance(entry.content, list) and len(entry.content) > 0:
+                raw_description = entry.content[0].get('value', '')
+            elif isinstance(entry.content, str):
+                raw_description = entry.content
+        
+        # 이미지 URL 추출 (원본 HTML에서, raw_description이 있을 때만)
+        thumbnail_url = None
+        if raw_description:
+            thumbnail_url = self._extract_image_from_html(raw_description)
+            # HTML 태그 제거하여 순수 텍스트만 추출
+            description_text = self._extract_text_from_html(raw_description)
+        else:
+            description_text = ''
+        
+        # description이 비어있거나 매우 짧으면 (HTML만 있었던 경우)
+        # title을 description으로 사용
+        if not description_text or len(description_text.strip()) < 10:
+            title = entry.get('title', '').strip() if hasattr(entry, 'title') else ''
+            if title:
+                description_text = title
+
+        return description_text, thumbnail_url
+    
+    def _is_likely_description(self, text: str) -> bool:
+        """
+        텍스트가 description처럼 보이는지 확인
+        (HTML 태그가 많거나, 텍스트가 길거나, 문장 형태면 description일 가능성 높음)
+        """
+        if not text:
+            return False
+
+        # HTML 태그가 많으면 description일 가능성 높음
+        html_tag_count = len(re.findall(r'<[^>]+>', text))
+        if html_tag_count > 2:
+            return True
+
+        # 텍스트 길이가 100자 이상이면 description일 가능성 높음
+        if len(text) > 100:
+            return True
+
+        # 문장 형태인지 확인
+        sentence_indicators = ['.', '!', '?', '。', '，', ',']
+        if any(indicator in text for indicator in sentence_indicators):
+            if len(text) > 30:
+                return True
+
+        # 공백이 많으면 문장 형태일 가능성
+        space_count = text.count(' ')
+        if space_count > 3 and len(text) > 30:
+            return True
+
+        return False
+    
+    def _get_category_from_entry(self, entry) -> str:
+        """
+        RSS entry에서 category 추출 (다중 소스 확인)
+        
+        Args:
+            entry: feedparser entry 객체
+            
+        Returns:
+            category 문자열
+        """
+        # 다중 소스에서 category 찾기
+        category = None
+        title = entry.get('title', '').strip() if hasattr(entry, 'title') else ''
+        
+        # 0. dc_category 확인 (Dublin Core 표준, 한겨레신문 등에서 사용)
+        if hasattr(entry, 'dc_category') and entry.dc_category:
+            if isinstance(entry.dc_category, str):
+                category = entry.dc_category
+            elif isinstance(entry.dc_category, list) and len(entry.dc_category) > 0:
+                category = entry.dc_category[0] if isinstance(entry.dc_category[0], str) else entry.dc_category[0].get('term', '')
+        
+        # 1. category 필드 확인
+        if not category and hasattr(entry, 'category') and entry.category:
+            candidate = None
+            if isinstance(entry.category, str):
+                candidate = entry.category
+            elif isinstance(entry.category, list) and len(entry.category) > 0:
+                # 리스트인 경우 첫 번째 항목 사용
+                candidate = entry.category[0] if isinstance(entry.category[0], str) else entry.category[0].get('term', '')
+            
+            # category 값이 title과 같거나 description처럼 보이면 무시
+            if candidate and candidate.strip():
+                if candidate.strip() != title.strip():
+                    # description처럼 보이지 않는 경우만 사용
+                    if not self._is_likely_description(candidate):
+                        category = candidate
+        
+        # 2. tags 확인
+        if not category and hasattr(entry, 'tags') and entry.tags:
+            if isinstance(entry.tags, list) and len(entry.tags) > 0:
+                tag = entry.tags[0]
+                candidate = None
+                if isinstance(tag, dict):
+                    candidate = tag.get('term', '')
+                elif isinstance(tag, str):
+                    candidate = tag
+                
+                # tags의 term도 title과 같거나 description처럼 보이면 무시
+                if candidate and candidate.strip():
+                    if candidate.strip() != title.strip():
+                        if not self._is_likely_description(candidate):
+                            category = candidate
+        
+        # 3. subject 확인
+        if not category and hasattr(entry, 'subject') and entry.subject:
+            candidate = entry.subject
+            if candidate and candidate.strip():
+                if candidate.strip() != title.strip():
+                    if not self._is_likely_description(candidate):
+                        category = candidate
+        
+        return category.strip() if category else ''
     
     def parse_feed(self, rss_url: str) -> List[Dict]:
         """
@@ -95,51 +338,57 @@ class RSSCollectorService:
                 print(article['title'])
         """
         try:
-            # feedparser를 사용하여 RSS 피드 파싱
-            # feedparser.parse()는 URL을 직접 받아서 HTTP 요청을 수행하고 파싱합니다.
             feed = feedparser.parse(rss_url)
             
-            # 파싱 결과 확인
-            # feed.bozo는 파싱 오류가 발생했는지 여부를 나타냅니다.
             if feed.bozo and feed.bozo_exception:
                 self.logger.warning(
                     f"RSS 피드 파싱 경고: {rss_url} - {feed.bozo_exception}"
                 )
             
-            # 기사 목록 추출
             articles = []
             
-            # feed.entries는 RSS 피드의 각 <item> 또는 Atom 피드의 각 <entry>에 해당합니다.
             for entry in feed.entries:
                 try:
-                    # 발행 시간 파싱
-                    # feedparser는 다양한 날짜 형식을 자동으로 파싱합니다.
                     published_time = None
                     if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                        # published_parsed는 time.struct_time 객체입니다.
-                        # 이를 datetime 객체로 변환합니다.
-                        from time import mktime
                         published_time = datetime.fromtimestamp(
                             mktime(entry.published_parsed)
                         )
                     elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                        # published가 없으면 updated를 사용합니다.
-                        from time import mktime
                         published_time = datetime.fromtimestamp(
                             mktime(entry.updated_parsed)
                         )
                     
-                    # 기사 정보 딕셔너리 생성
+                    # description과 thumbnail_url 추출 (HTML 태그 제거 및 이미지 추출)
+                    description_text, thumbnail_url = self._get_description_from_entry(entry)
+                    
+                    # category 추출 (다중 소스 확인)
+                    category = self._get_category_from_entry(entry)
+                    
+                    # 썸네일 이미지가 description에서 추출되지 않았으면 media 필드에서 확인
+                    if not thumbnail_url:
+                        if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
+                            if isinstance(entry.media_thumbnail, list) and len(entry.media_thumbnail) > 0:
+                                thumbnail_url = entry.media_thumbnail[0].get('url', '')
+                        elif hasattr(entry, 'media_content') and entry.media_content:
+                            if isinstance(entry.media_content, list) and len(entry.media_content) > 0:
+                                media = entry.media_content[0]
+                                if isinstance(media, dict):
+                                    thumbnail_url = media.get('url', '') or media.get('href', '')
+                    
+                    # 기사 정보 딕셔너리 생성 (HTML entity decode로 quot;, hellip; 등 → 실제 특수문자)
+                    raw_title = entry.get('title', '') or ''
+                    raw_link = entry.get('link', '') or ''
                     article = {
-                        'title': entry.get('title', '').strip(),  # 제목
-                        'link': entry.get('link', '').strip(),    # URL
-                        'description': entry.get('description', '').strip(),  # 설명
+                        'title': unescape(raw_title.strip()),
+                        'link': unescape(raw_link.strip()),
+                        'description': unescape(description_text) if description_text else '',  # 설명 (HTML 태그 제거된 순수 텍스트)
                         'published': published_time,  # 발행 시간 (datetime 객체)
                         'author': entry.get('author', '').strip() if hasattr(entry, 'author') else '',  # 작성자
-                        'category': entry.get('category', '').strip() if hasattr(entry, 'category') else '',  # 카테고리
+                        'category': category,  # 카테고리 (다중 소스 확인)
+                        'thumbnail_url': thumbnail_url,  # 썸네일 이미지 URL
                     }
                     
-                    # 필수 필드 검증 (제목과 URL은 반드시 있어야 함)
                     if article['title'] and article['link']:
                         articles.append(article)
                     else:
@@ -148,7 +397,6 @@ class RSSCollectorService:
                         )
                         
                 except Exception as e:
-                    # 개별 기사 파싱 오류는 로그만 남기고 계속 진행
                     self.logger.error(
                         f"기사 파싱 오류 (URL: {rss_url}): {str(e)}",
                         exc_info=True
@@ -161,7 +409,6 @@ class RSSCollectorService:
             return articles
             
         except Exception as e:
-            # 전체 파싱 실패 시 로그 기록
             self.logger.error(
                 f"RSS 피드 파싱 실패: {rss_url} - {str(e)}",
                 exc_info=True
@@ -199,7 +446,6 @@ class RSSCollectorService:
         job = None
         try:
             # 수집 작업 로그 생성 (GenericForeignKey 사용)
-            from django.contrib.contenttypes.models import ContentType
             content_type = ContentType.objects.get_for_model(NewsSource)
             job = DataCollectionJob.objects.create(
                 content_type=content_type,
@@ -290,6 +536,19 @@ class RSSCollectorService:
                     # 데이터베이스에 기사 저장
                     # get_or_create를 사용하여 중복 저장을 방지합니다.
                     # (Redis 체크와 DB 체크를 모두 수행하여 이중 안전장치)
+                    thumbnail_url = article.get('thumbnail_url', '')
+                    if thumbnail_url and len(thumbnail_url) > 1000:
+                        # URL이 너무 길면 잘라내기
+                        thumbnail_url = thumbnail_url[:1000]
+
+                    # 카테고리가 RSS에 없으면 소스 카테고리로 대체
+                    # (예: 컨슈머타임스처럼 RSS에 category가 없는 경우)
+                    category_value = article.get('category', '') or ''
+                    if not category_value and getattr(source, 'category', None):
+                        category_value = str(source.category).strip()
+                    if category_value and len(category_value) > 100:
+                        category_value = category_value[:100]
+                    
                     news_article, created = NewsArticle.objects.get_or_create(
                         url=article_url,
                         defaults={
@@ -297,10 +556,34 @@ class RSSCollectorService:
                             'title': article.get('title', ''),
                             'description': article.get('description', ''),
                             'author': article.get('author', '')[:200] if article.get('author') else '',
-                            'category': article.get('category', '')[:100] if article.get('category') else '',
+                            'category': category_value if category_value else None,
                             'published_at': article.get('published'),
+                            'thumbnail_url': thumbnail_url if thumbnail_url else None,
                         }
                     )
+
+                    # 이미 존재하는 기사라도 비어있는 필드는 최신 값으로 채움
+                    # (get_or_create는 defaults를 기존 row에 적용하지 않기 때문)
+                    if not created:
+                        update_fields = []
+
+                        new_description = article.get('description', '')
+                        if (not news_article.description) and new_description:
+                            news_article.description = new_description
+                            update_fields.append('description')
+
+                        new_category = category_value
+                        if (not news_article.category) and new_category:
+                            news_article.category = new_category
+                            update_fields.append('category')
+
+                        new_thumbnail = thumbnail_url if thumbnail_url else None
+                        if (not news_article.thumbnail_url) and new_thumbnail:
+                            news_article.thumbnail_url = new_thumbnail
+                            update_fields.append('thumbnail_url')
+
+                        if update_fields:
+                            news_article.save(update_fields=update_fields)
                     
                     if created:
                         # 새로 생성된 기사인 경우
@@ -600,13 +883,6 @@ class NewsSourceCSVService:
                 'error_details': 오류 상세 정보 리스트
             }
         """
-        import csv
-        import os
-        from django.conf import settings
-        from django.db import transaction
-        from .models import NewsSource
-        from .serializers import NewsSourceSerializer
-        
         results = {
             'created': 0,
             'updated': 0,
@@ -875,7 +1151,6 @@ class DCInsideCollectorService:
         # 수집 작업 로그 생성 (GenericForeignKey 사용)
         job = None
         try:
-            from django.contrib.contenttypes.models import ContentType
             content_type = ContentType.objects.get_for_model(SocialMediaSource)
             job = DataCollectionJob.objects.create(
                 content_type=content_type,
@@ -1098,9 +1373,6 @@ class DCInsideCollectorService:
                     if not thumbnail_url:
                         content = post_data.get('content', '')
                         if content:
-                            import re
-                            from html import unescape
-                            
                             # <img src="..." /> 또는 <img src='...' /> 패턴 찾기
                             # src 속성이 따옴표 없이도 작동하도록 개선
                             img_pattern = r'<img[^>]+src\s*=\s*["\']?([^"\'>\s]+)["\']?[^>]*>'
@@ -1249,9 +1521,6 @@ class RedditRSSCollectorService:
             return html_content
         
         try:
-            from bs4 import BeautifulSoup
-            from html import unescape
-            
             # HTML 엔티티 디코딩
             html_content = unescape(html_content)
             
@@ -1363,7 +1632,6 @@ class RedditRSSCollectorService:
         # 수집 작업 로그 생성 (GenericForeignKey 사용)
         job = None
         try:
-            from django.contrib.contenttypes.models import ContentType
             content_type = ContentType.objects.get_for_model(SocialMediaSource)
             job = DataCollectionJob.objects.create(
                 content_type=content_type,
@@ -1379,20 +1647,42 @@ class RedditRSSCollectorService:
         items_error = 0
         
         try:
-            # RSS 피드 파싱
-            feed = feedparser.parse(rss_url)
+            # RSS 피드 파싱 (requests로 직접 다운로드 후 파싱)
+            # Reddit RSS 피드는 User-Agent가 필요하고, feedparser의 request_headers가 
+            # 제대로 작동하지 않을 수 있어 requests를 사용합니다
             
+            # User-Agent 헤더 설정
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            # requests로 RSS 피드 다운로드
+            response = requests.get(rss_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # feedparser로 파싱 (문자열로 전달)
+            feed = feedparser.parse(response.content)
+            
+            # bozo 모드에서도 entries가 있으면 계속 진행
+            # (일부 잘못된 XML 형식이어도 데이터는 파싱될 수 있음)
             if feed.bozo and feed.bozo_exception:
-                error_msg = f"RSS 피드 파싱 오류: {str(feed.bozo_exception)}"
-                self.logger.error(error_msg)
-                return {
-                    'status': 'error',
-                    'source': str(source),
-                    'error_message': error_msg,
-                    'items_collected': 0,
-                    'items_skipped': 0,
-                    'items_error': 0
-                }
+                if feed.entries:
+                    # entries가 있으면 경고만 남기고 계속 진행
+                    self.logger.warning(
+                        f"RSS 피드 파싱 경고 (계속 진행): {str(feed.bozo_exception)}"
+                    )
+                else:
+                    # entries가 없으면 에러 반환
+                    error_msg = f"RSS 피드 파싱 오류: {str(feed.bozo_exception)}"
+                    self.logger.error(error_msg)
+                    return {
+                        'status': 'error',
+                        'source': str(source),
+                        'error_message': error_msg,
+                        'items_collected': 0,
+                        'items_skipped': 0,
+                        'items_error': 0
+                    }
             
             if not feed.entries:
                 self.logger.warning(f"RSS 피드에 항목이 없습니다: {rss_url}")
@@ -1423,7 +1713,6 @@ class RedditRSSCollectorService:
                     if not post_id:
                         # URL에서 추출 시도
                         # 예: https://www.reddit.com/r/technology/comments/1pirwx8/...
-                        import re
                         match = re.search(r'/comments/([^/]+)/', post_url)
                         if match:
                             post_id = f"t3_{match.group(1)}"
@@ -1446,7 +1735,6 @@ class RedditRSSCollectorService:
                             # feedparser가 자동으로 파싱한 datetime 객체 사용
                             published_at = entry.get('published_parsed')
                             if published_at:
-                                from time import struct_time
                                 if isinstance(published_at, struct_time):
                                     published_at = datetime(*published_at[:6])
                                     published_at = timezone.make_aware(published_at)
