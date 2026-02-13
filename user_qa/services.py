@@ -235,108 +235,13 @@ class VectorDBService:
         return all_results[:top_k]
 
 
-def _expand_query(query_text: str, use_llm: bool = False) -> str:
-    """
-    쿼리를 더 구체적으로 확장하여 검색 품질 향상
-    
-    주의: 너무 많은 키워드를 추가하면 오히려 검색 품질이 떨어질 수 있으므로
-    원본 쿼리를 우선하고, 핵심 키워드만 추가합니다.
-
-    Args:
-        query_text: 원본 쿼리
-        use_llm: LLM을 사용하여 쿼리 확장할지 여부 (기본값: False, 빠른 키워드 확장 사용)
-
-    Returns:
-        확장된 쿼리 문자열
-    """
-    query = query_text.strip()
-    
-    if use_llm:
-        # TODO: LLM을 사용한 쿼리 확장 (향후 구현)
-        # 현재는 키워드 기반 확장 사용
-        pass
-    
-    # 인명이나 특정 키워드가 포함된 경우 확장을 최소화 (검색 정확도 유지)
-    query_lower = query.lower()
-    name_pattern = re.compile(r'[가-힣]{2,4}(?=\s|$|관련|의|이|가|을|를|에|에서)')
-    has_person_name = bool(name_pattern.search(query))
-    
-    # 인명이 포함된 경우 원본 쿼리 그대로 사용 (확장 최소화)
-    if has_person_name:
-        return query
-    
-    # 키워드 기반 확장
-    keyword_expansions = {
-        "주식": ["주식", "주가", "증시", "투자", "종목", "시장", "증권", "코스피", "코스닥"],
-        "이슈": ["이슈", "뉴스", "소식", "이벤트", "사건", "화제", "트렌드"],
-        "경제": ["경제", "금융", "시장", "경기", "부동산", "물가"],
-        "기술": ["기술", "IT", "소프트웨어", "하드웨어", "인공지능", "AI"],
-        "정치": ["정치", "정부", "국회", "선거", "정당"],
-        "사회": ["사회", "문화", "교육", "복지"],
-    }
-    
-    # 쿼리에서 키워드 찾기 및 확장
-    expanded_terms = [query]  # 원본 쿼리 포함
-    
-    for key, synonyms in keyword_expansions.items():
-        if key in query_lower:
-            # 관련 키워드 추가 (최대 2개만)
-            added = 0
-            for synonym in synonyms:
-                if synonym not in query_lower and added < 2:
-                    expanded_terms.append(synonym)
-                    added += 1
-    
-    # 중복 제거
-    seen = set()
-    unique_terms = []
-    for term in expanded_terms:
-        term_lower = term.lower()
-        if term_lower not in seen:
-            unique_terms.append(term)
-            seen.add(term_lower)
-    
-    # 원본 쿼리를 우선하고, 핵심 키워드만 최소한으로 추가
-    # 너무 많은 키워드를 추가하면 검색 품질이 떨어질 수 있음
-    if len(unique_terms) > 1:
-        # 최대 2개의 핵심 키워드만 추가 (인명이 없을 때만)
-        additional_keywords = unique_terms[1:3]  # 원본 제외하고 최대 2개만
-        expanded = f"{query} {' '.join(additional_keywords)}"
-    else:
-        expanded = query
-    
-    return expanded.strip()
-
-
-def _extract_core_query(query_text: str) -> str:
-    """
-    긴 대화형 쿼리에서 핵심 키워드만 추출하여 벡터 검색 품질 향상.
-
-    예: "요즘 커뮤니티에서 트럼프에 대해 어떻게 생각해?" → "트럼프"
-    예: "최근 뉴스에서 반도체 관련 이슈 정리해줘" → "반도체"
-
-    15자 이하면 이미 충분히 짧으므로 그대로 반환.
-    """
-    query = (query_text or "").strip()
-    if not query or len(query) <= 15:
-        return query
-
-    tokens = _tokens_ko_simple(query)
-    if not tokens:
-        return query
-
-    # 의미 있는 토큰만 남김 (stop tokens는 _tokens_ko_simple에서 이미 제거됨)
-    core_tokens = sorted(tokens, key=lambda t: len(t), reverse=True)
-
-    if core_tokens:
-        return " ".join(core_tokens)
-    return query
-
-
 def _extract_key_entities(query_text: str) -> List[str]:
     """
     쿼리에서 핵심 엔티티(인명, 기관명, 고유명사 등)를 추출.
     하이브리드 검색의 키워드 필터링에 사용.
+
+    공백 기준으로 토큰을 분리한 뒤 조사를 제거하여,
+    문자열 중간에서 잘못된 엔티티가 추출되는 것을 방지.
 
     예: "요즘 커뮤니티에서 이재명에 대해 어떻게 생각해?" → ["이재명"]
     예: "트럼프 관세 정책 반응" → ["트럼프"]
@@ -351,34 +256,57 @@ def _extract_key_entities(query_text: str) -> List[str]:
 
     entities: List[str] = []
 
-    # 1. 한글 인명 패턴 (2-4글자, 조사 제거)
-    # 예: 이재명, 윤석열, 트럼프, 시진핑
-    korean_name_pattern = re.compile(r'([가-힣]{2,4})(?:은|는|이|가|을|를|에|의|와|과|로|도|만|께|에서|에게|한테|부터|까지|처럼|보다|라고|이라|대해|대한|관련|관해)?(?:\s|$|,|\.)')
+    common_words = {
+        "최근", "요즘", "오늘", "내일", "어제", "지금", "우리", "그들", "여기", "거기",
+        "어떻게", "무엇", "언제", "어디", "왜", "누가", "얼마나",
+        "정말", "아주", "매우", "너무", "조금", "많이", "적게",
+        "그리고", "하지만", "그러나", "또한", "그래서", "따라서",
+        "대통령", "장관", "의원", "기자", "교수", "대표", "사장",
+        "생각", "의견", "반응", "전망", "분석", "정리", "요약",
+        "상황", "현황", "동향", "추세", "변화", "영향", "결과",
+    }
 
-    for match in korean_name_pattern.finditer(query):
-        name = match.group(1)
-        # 불용어 제외
-        if name not in _STOP_TOKENS and len(name) >= 2:
-            # 일반적인 단어가 아닌 고유명사 가능성 체크
-            # (완벽하지 않지만 기본적인 필터링)
-            common_words = {
-                "최근", "요즘", "오늘", "내일", "어제", "지금", "우리", "그들", "여기", "거기",
-                "어떻게", "무엇", "언제", "어디", "왜", "누가", "얼마나",
-                "정말", "아주", "매우", "너무", "조금", "많이", "적게",
-                "그리고", "하지만", "그러나", "또한", "그래서", "따라서",
-                "대통령", "장관", "의원", "기자", "교수", "대표", "사장",
-            }
-            if name not in common_words and name not in entities:
-                entities.append(name)
+    # 1. 공백 기준 토큰 분리 → 조사 제거 → 엔티티 판별
+    tokens = query.split()
+    for token in tokens:
+        # 영문 고유명사 (대문자로 시작하거나 전체 대문자)
+        eng_match = re.match(r'^([A-Z][a-zA-Z]*|[A-Z]{2,})\b', token)
+        if eng_match:
+            word = eng_match.group(1)
+            if len(word) >= 2 and word not in entities:
+                entities.append(word)
+            continue
 
-    # 2. 영문 고유명사 (대문자로 시작하거나 전체 대문자)
-    english_pattern = re.compile(r'\b([A-Z][a-zA-Z]*|[A-Z]{2,})\b')
-    for match in english_pattern.finditer(query):
-        word = match.group(1)
-        if len(word) >= 2 and word not in entities:
-            entities.append(word)
+        # 한글이 포함되지 않은 토큰은 스킵
+        if not re.search(r'[가-힣]', token):
+            continue
 
-    # 3. 한글 복합어/기관명 (3글자 이상)
+        # 한글 토큰: 조사 제거
+        stripped = _strip_ko_particles(token)
+
+        # 불용어/일반 단어 제외
+        if stripped in _STOP_TOKENS or stripped in common_words:
+            continue
+
+        # 2-4글자 순수 한글 → 엔티티 후보
+        if re.match(r'^[가-힣]{2,4}$', stripped) and stripped not in entities:
+            entities.append(stripped)
+            continue
+
+        # 5글자 이상: 동사/어미 접미사를 제거하여 명사 추출
+        # 예: "비트코인알려줘" → "비트코인", "트럼프어떻게생각해" → "트럼프"
+        if len(stripped) >= 5 and re.match(r'^[가-힣]+$', stripped):
+            for suffix in _VERB_SUFFIXES:
+                if stripped.endswith(suffix) and len(stripped) > len(suffix):
+                    candidate = stripped[:-len(suffix)]
+                    if (2 <= len(candidate) <= 4
+                            and candidate not in _STOP_TOKENS
+                            and candidate not in common_words
+                            and candidate not in entities):
+                        entities.append(candidate)
+                    break
+
+    # 2. 한글 복합어/기관명 (전체 텍스트에서 검색)
     # 예: 삼성전자, 현대자동차, 민주당, 국민의힘
     compound_pattern = re.compile(r'([가-힣]{3,}(?:전자|자동차|그룹|증권|은행|보험|제약|바이오|엔터|미디어|당|의힘|연합|연대|회의|위원회|청와대|국회|정부))')
     for match in compound_pattern.finditer(query):
@@ -395,9 +323,24 @@ _STOP_TOKENS = {
     "대해", "대한", "대해서", "무엇", "어떤", "어떻게", "알려", "설명", "해줘",
 }
 
+# 5글자 이상 토큰에서 동사/어미 접미사를 제거하기 위한 패턴 (긴 것부터 매칭)
+_VERB_SUFFIXES = [
+    "어떻게생각해", "어떻게됐어", "어떻게해",
+    "알려줘봐", "알려줘요", "알려주세요", "알려달라", "알려줄래",
+    "해줘요", "봐줘요", "줘봐요",
+    "있나요", "있어요", "인가요", "일까요", "인데요",
+    "알려줘", "해줘", "봐줘", "줘봐", "할까", "일까", "인가",
+    "뭐야", "뭐냐", "뭐임",
+    "있어", "있나", "있냐", "인지", "인데", "이야",
+    "했던", "한다", "했다", "하는",
+    "줘", "해",
+]
+
 # 한국어 조사 제거 패턴 (긴 조사를 먼저 매칭하여 오동작 방지)
 _KO_PARTICLE_RE = re.compile(
-    r'(?:에서|으로|에게|한테|부터|까지|처럼|보다|라고|이라|라는|이라는|에는|에도|에서는|'
+    r'(?:에서의|으로의|에서도|으로도|에서는|이라는|'
+    r'관련|관한|따른|대해|대한|관해|통해|위해|위한|'
+    r'에서|으로|에게|한테|부터|까지|처럼|보다|라고|이라|라는|에는|에도|'
     r'은|는|이|가|을|를|에|의|와|과|로|도|만|께|된)$'
 )
 
@@ -415,12 +358,22 @@ def _tokens_ko_simple(s: str) -> set[str]:
     """
     "완전 무관 제거" 목적의 초간단 토큰화 (한글/영문/숫자 2글자 이상)
     - 한국어 조사를 제거하여 "시진핑에" → "시진핑"으로 정규화
+    - 동사/어미 접미사를 제거하여 "뉴스알려줘" → "뉴스"로 정규화
     """
     s = (s or "").lower()
     raw_toks = set(re.findall(r"[0-9a-zA-Z가-힣]{2,}", s))
     toks = set()
     for t in raw_toks:
-        toks.add(_strip_ko_particles(t))
+        stripped = _strip_ko_particles(t)
+        # 5글자 이상 한글 토큰: 동사/어미 접미사 제거 (예: "뉴스알려줘" → "뉴스")
+        if len(stripped) >= 5 and re.match(r'^[가-힣]+$', stripped):
+            for suffix in _VERB_SUFFIXES:
+                if stripped.endswith(suffix) and len(stripped) > len(suffix):
+                    candidate = stripped[:-len(suffix)]
+                    if len(candidate) >= 2:
+                        stripped = candidate
+                    break
+        toks.add(stripped)
     return toks - _STOP_TOKENS
 
 def _keyword_overlap_count(query: str, text: str) -> int:
@@ -513,12 +466,15 @@ def _detect_source_intent(query_text: str) -> str:
     news_keywords = [
         "뉴스", "기사", "보도", "언론", "신문", "매체",
         "보도자료", "속보", "헤드라인",
-        "news", "article", "press",
+        "방송", "취재", "리포트", "보도내용",
+        "news", "article", "press", "report",
     ]
     community_keywords = [
         "커뮤니티", "게시글", "게시판", "반응", "여론", "댓글",
         "디시", "dcinside", "레딧", "reddit",
         "갤러리", "유저", "네티즌", "온라인반응", "온라인 반응",
+        "SNS", "소셜", "트위터", "엑스", "인스타", "페이스북",
+        "유튜브", "블로그", "카페", "클리앙", "루리웹", "에펨코리아",
     ]
 
     has_news = any(kw in q for kw in news_keywords)
@@ -1380,7 +1336,7 @@ class RAGService:
             "core_question": "",
             "search_hint": "",
         }
-        if bool(use_intent_router) or bool(_get_setting("RAG_INTENT_ROUTER_ENABLED", False)):
+        if bool(_get_setting("RAG_INTENT_ROUTER_ENABLED", True)) or bool(use_intent_router):
             if self._should_skip_intent_llm(query_text):
                 logger.info(f"[IntentRouter] 스킵(룰 매칭): query='{query_text}'")
             else:
@@ -1398,18 +1354,28 @@ class RAGService:
         # 하이브리드 검색: 시맨틱 + 키워드
         # ========================================
 
-        # 1) 핵심 엔티티 추출 (키워드 검색용) - 원본 쿼리 + 재구성 쿼리 모두에서 추출
+        # 1) 핵심 엔티티 추출 (키워드 검색용) - 원본 쿼리 + 재구성 쿼리 + intent topic_entity
         entities_from_original = _extract_key_entities(query_text)
         entities_from_reformulated = _extract_key_entities(reformulated_query)
         key_entities = list(set(entities_from_original + entities_from_reformulated))
+        if intent_info.get("topic_entity"):
+            topic = intent_info["topic_entity"].strip()
+            if topic and topic not in _STOP_TOKENS and topic not in key_entities:
+                key_entities.append(topic)
         logger.info(f"[RAG 검색] 추출된 엔티티: {key_entities}")
 
-        # 2) 시맨틱 검색 (후보군 A) - 재구성된 쿼리로 검색
+        # 2) 시맨틱 검색 (후보군 A) - 재구성된 쿼리 + search_hint 결합
+        search_query = reformulated_query
+        if intent_info.get("search_hint"):
+            hint = intent_info["search_hint"].strip()
+            if hint and hint != reformulated_query:
+                search_query = f"{reformulated_query} {hint}"
+
         retrieval_k = max(int(top_k) * 8, int(top_k) + 30)
         candidate_distance_threshold = float(_get_setting("RAG_CANDIDATE_DISTANCE_THRESHOLD", 1.5))
 
         semantic_candidates = self.vector_db.similarity_search(
-            reformulated_query,
+            search_query,
             top_k=retrieval_k,
             distance_threshold=candidate_distance_threshold,
             fetch_multiplier=3,
@@ -1545,7 +1511,23 @@ class RAGService:
         if force_low_quality:
             evidence_quality = "low"
         else:
-            evidence_quality = "adequate" if avg_distance <= weak_threshold else "low"
+            # 키워드 매칭(엔티티 포함)된 결과가 과반이면 근거 충분으로 판정
+            # → 키워드 검색으로 확실히 엔티티가 포함된 문서인데 시맨틱 거리만으로 "low" 처리되는 문제 방지
+            keyword_matched = 0
+            if key_entities:
+                for r in results:
+                    meta = r.metadata or {}
+                    combined = f"{meta.get('title', '')}\n{meta.get('excerpt', '')}\n{r.document or ''}"
+                    combined_lower = combined.lower()
+                    if any(ent.lower() in combined_lower for ent in key_entities):
+                        keyword_matched += 1
+
+            if keyword_matched > len(results) // 2:
+                evidence_quality = "adequate"
+            elif avg_distance <= weak_threshold:
+                evidence_quality = "adequate"
+            else:
+                evidence_quality = "low"
 
         news_count = sum(1 for r in results if _infer_type(r.id, r.metadata) == "news")
         social_count = sum(1 for r in results if _infer_type(r.id, r.metadata) == "social")
