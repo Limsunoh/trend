@@ -608,7 +608,8 @@ class OpenAIResponsesLLM:
             import httpx
             from openai import OpenAI
 
-            http_client = httpx.Client(timeout=httpx.Timeout(60.0))
+            _llm_timeout = int(os.getenv("OPENAI_API_TIMEOUT", 45))
+            http_client = httpx.Client(timeout=httpx.Timeout(_llm_timeout, connect=10.0))
             self.client = OpenAI(api_key=api_key, http_client=http_client)
         except Exception as e:
             raise RuntimeError(
@@ -897,12 +898,16 @@ class OpenAIResponsesLLM:
         )
         system_lines.append("절대로 커뮤니티 게시글의 내용을 뉴스 보도처럼 사실로 단정하지 마세요.")
         system_lines.append(
+            "뉴스와 커뮤니티 정보가 상충할 경우, 뉴스를 사실로 우선 제시하고 "
+            "커뮤니티는 '일부에서는 다른 반응도 있다'는 정도로만 언급하세요."
+        )
+        system_lines.append(
             "CONTEXT에 [EVIDENCE_QUALITY: low]가 표시되어 있으면, "
             "'수집된 자료가 제한적이어서' 또는 '관련 자료가 부족하지만'이라는 전제를 반드시 붙이세요."
         )
         system_lines.append("CONTEXT에 없는 사실을 만들어내지 마세요.")
         system_lines.append("각 정보의 출처 유형([뉴스] 또는 [커뮤니티])을 답변 내에서 자연스럽게 구분해 주세요.")
-        system_lines.append("답변은 1~2문단, 150자 이내로 핵심만 간결하게 작성하세요.")
+        system_lines.append("답변은 1~3문단으로 핵심만 간결하게 작성하세요. 불필요하게 늘리지 마세요.")
         system_lines.append("기사 제목을 나열하지 말고, 이슈를 자연스럽게 풀어 설명하세요.")
         system_lines.append("답변은 완전한 문장으로 끝내고, 추가 질문이나 제안은 붙이지 마세요.")
 
@@ -976,7 +981,18 @@ class OpenAIResponsesLLM:
         )
 
         t0 = time.time()
-        res = self.client.responses.create(**payload)
+        _max_retries = 2
+        for _attempt in range(_max_retries + 1):
+            try:
+                res = self.client.responses.create(**payload)
+                break
+            except (ConnectionError, TimeoutError, OSError) as _net_err:
+                if _attempt < _max_retries:
+                    _wait = 2 ** _attempt
+                    logger.warning(f"[LLM] 일시적 오류, {_wait}s 후 재시도 ({_attempt+1}/{_max_retries}): {_net_err}")
+                    time.sleep(_wait)
+                else:
+                    raise
         dt = time.time() - t0
 
         text = self._extract_text(res)
@@ -1026,10 +1042,6 @@ class OpenAIResponsesLLM:
                 debug_info["response_slots"] = list(res.__slots__)[:10]
             
             logger.error(f"[LLM 빈 응답] model={final_model} 소요={dt:.2f}s response_id={response_id}")
-            logger.error(f"[LLM 디버그 정보] {debug_info}")
-            logger.error(
-                f"[LLM 빈 응답] model={final_model} 소요={dt:.2f}s response_id={response_id}"
-            )
             logger.error(f"[LLM 디버그 정보] {debug_info}")
             
             # raw 응답을 dict로 변환 시도 (디버깅용)
@@ -1320,6 +1332,8 @@ class RAGService:
         instructions: Optional[str] = None,
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
+        _t_pipeline = time.time()
+
         # ✅ 빈 쿼리 검사를 가장 먼저 수행 (불필요한 DB/캐시 호출 방지)
         query_text = (query_text or "").strip()
         if not query_text:
@@ -1368,9 +1382,10 @@ class RAGService:
             "weak_rel": float(_get_setting("RAG_WEAK_RELEVANCE_THRESHOLD", 0.65)),
         }
 
-        # ✅ 3) force_refresh면 캐시 무시
+        # ✅ 3) 캐시 조회 (정규화된 키 사용)
+        _cache_query = re.sub(r"\s+", " ", query_text).strip().rstrip("?？！!.")
         if not force_refresh:
-            cached_response = self.cache_service.get_cached_response(query_text, cache_context=cache_context)
+            cached_response = self.cache_service.get_cached_response(_cache_query, cache_context=cache_context)
             if cached_response:
                 logger.debug("[RAGService.query] 캐시된 응답 반환 (캐시 히트)")
                 return cached_response
@@ -1405,12 +1420,14 @@ class RAGService:
             or (len(pre_entities) >= 1 and len(query_tokens) <= 4)
         )
 
+        _t_stage = time.time()
         if skip_reformulate:
             reformulated_query = query_text
             logger.info(f"[RAG 검색] 명확한 쿼리이므로 재구성 스킵: '{query_text}' (엔티티: {pre_entities})")
         else:
             reformulated_query = self.llm.reformulate_query(query_text, model=final_model)
             logger.info(f"[RAG 검색] 원본: '{query_text}' → 재구성: '{reformulated_query}'")
+        logger.info(f"[RAG 타이밍] 쿼리 재구성: {time.time() - _t_stage:.2f}s")
 
         # ========================================
         # 하이브리드 검색: 시맨틱 + 키워드
@@ -1472,6 +1489,7 @@ class RAGService:
                 candidates.append(r)
 
         logger.info(f"[RAG 검색] 병합된 후보군: {len(candidates)}개 (키워드: {len(keyword_candidates)}, 시맨틱: {len(semantic_candidates)})")
+        logger.info(f"[RAG 타이밍] 검색(시맨틱+키워드): {time.time() - _t_stage:.2f}s")
 
         if not candidates:
             logger.warning(f"[RAG 검색] 검색 결과 없음: query={query_text}")
@@ -1493,13 +1511,18 @@ class RAGService:
         if time_scope_days > 0:
             from datetime import datetime, timezone, timedelta
             cutoff_dt = datetime.now(timezone.utc) - timedelta(days=time_scope_days)
-            cutoff_str = cutoff_dt.isoformat()
 
             recent_candidates = []
             for r in candidates:
                 pa = (r.metadata or {}).get("published_at", "")
-                if pa >= cutoff_str:
-                    recent_candidates.append(r)
+                if not pa:
+                    continue
+                try:
+                    doc_dt = datetime.fromisoformat(pa.replace("Z", "+00:00"))
+                    if doc_dt >= cutoff_dt:
+                        recent_candidates.append(r)
+                except (ValueError, TypeError):
+                    pass
 
             # 시간 필터 후 결과가 충분하면 사용, 아니면 원본 유지
             if len(recent_candidates) >= max(int(top_k), 3):
@@ -1609,6 +1632,27 @@ class RAGService:
         results = results[:int(top_k)]
 
         # ========================================
+        # STEP E-2: 결과 다양성 보장 (같은 출처 편중 방지)
+        # ========================================
+        if len(results) > 2:
+            from collections import defaultdict as _ddict
+            _src_counts = _ddict(int)
+            _max_per_source = max(len(results) // 2, 2)
+            _diversified = []
+            _overflow = []
+            for r in results:
+                src = (r.metadata or {}).get("publisher") or (r.metadata or {}).get("source_name") or "unknown"
+                if _src_counts[src] < _max_per_source:
+                    _diversified.append(r)
+                    _src_counts[src] += 1
+                else:
+                    _overflow.append(r)
+            # 부족분을 overflow에서 채움
+            while len(_diversified) < int(top_k) and _overflow:
+                _diversified.append(_overflow.pop(0))
+            results = _diversified
+
+        # ========================================
         # STEP F: 품질 게이트 통과 결과 0건 → "근거 부족" 응답 (fallback 없음)
         # ========================================
         if not results:
@@ -1702,6 +1746,7 @@ class RAGService:
         if intent_instruction:
             final_instructions = f"{final_instructions}\n{intent_instruction}".strip() if final_instructions else intent_instruction
 
+        _t_stage = time.time()
         logger.debug(f"[RAGService.query] LLM 호출 시작 - context 길이: {len(context)}")
         try:
             llm_result = self.llm.answer(
@@ -1758,6 +1803,9 @@ class RAGService:
             logger.error(f"[RAGService.query] LLM 호출 예외: {type(e).__name__}: {str(e)}", exc_info=True)
             answer = f"LLM 호출 중 오류가 발생했습니다: {str(e)}"
 
+        logger.info(f"[RAG 타이밍] LLM 답변 생성: {time.time() - _t_stage:.2f}s")
+        logger.info(f"[RAG 타이밍] 전체 파이프라인: {time.time() - _t_pipeline:.2f}s")
+
         history = QueryHistory.objects.create(
             query_text=query_text,
             answer_text=answer,
@@ -1774,7 +1822,7 @@ class RAGService:
             "model": final_model,
         }
 
-        self.cache_service.cache_response(query_text, response, cache_context=cache_context)
+        self.cache_service.cache_response(_cache_query, response, cache_context=cache_context)
         return response
 
 
