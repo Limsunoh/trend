@@ -11,7 +11,7 @@ from sentry_sdk.transport import HttpTransport, Transport, make_transport
 
 def _get_dsn_extra():
     """환경 변수 SENTRY_DSN_EXTRA만 사용. .env에 없으면 두 번째 전송 안 함."""
-    return os.getenv("SENTRY_DSN_EXTRA", "").strip()
+    return os.getenv("SENTRY_DSN_EXTRA", "").strip().replace("\r", "")
 
 
 class DualDsnsTransport(Transport):

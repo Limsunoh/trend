@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.venv
+venv
+env
+.pytest_cache
+.coverage
+htmlcov
+
+# Django
+*.log
+db.sqlite3
+/media
+/staticfiles
+local_settings.py
+
+# Environment (use docker-compose env or mounted .env)
+.env
+.env.*
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Misc
+*.md
+!README.md
+reports
+TROUBLESHOOTING.md

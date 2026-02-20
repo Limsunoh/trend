@@ -61,7 +61,6 @@ class Command(BaseCommand):
                         f"1. Java가 설치되어 있는지 확인: java -version\n"
                         f"2. Java가 PATH에 있는지 확인\n"
                         f"3. 또는 --java-path 옵션으로 Java 경로 지정:\n"
-                        f'   python manage.py test_komoran --java-path "C:\\Program Files\\Java\\jdk-11\\bin\\java.exe"'
                     )
                 )
             else:
