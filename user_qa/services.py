@@ -487,6 +487,55 @@ def _detect_source_intent(query_text: str) -> str:
     return "any"
 
 
+def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
+    """
+    쿼리의 시간 범위를 일(day) 단위로 반환.
+    0 = 시간 제약 없음, N = 최근 N일 이내 문서 우선/필터.
+
+    예: "오늘 이슈" → 1, "최근 뉴스" → 7, "요즘 핫한" → 14
+    """
+    q = (query_text or "").strip().lower()
+
+    # 강한 시간 신호 (좁은 범위)
+    if any(kw in q for kw in ["오늘", "today", "방금", "지금"]):
+        return 1
+    if any(kw in q for kw in ["어제", "yesterday"]):
+        return 2
+    if any(kw in q for kw in ["이번주", "이번 주", "금주"]):
+        return 7
+
+    # 중간 시간 신호
+    if any(kw in q for kw in ["최근", "최신", "요즘", "요새", "핫한", "핫이슈",
+                                "트렌드", "트렌딩", "인기", "화제", "떠오르는"]):
+        return 14
+    if any(kw in q for kw in ["이번달", "이번 달", "금월"]):
+        return 30
+
+    # intent_info의 time_focus 활용
+    if intent_time_focus == "recent":
+        return 14
+    if intent_time_focus == "current":
+        return 30
+
+    return 0
+
+
+def _recency_score(published_at: str, now_ts: float) -> float:
+    """
+    published_at ISO 문자열 → 최근일수록 높은 점수 (0.0~1.0).
+    decay: 7일 지나면 0.5, 30일 지나면 ~0.19, 90일 지나면 ~0.07
+    """
+    if not published_at:
+        return 0.0
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(published_at)
+        days_ago = max((now_ts - dt.timestamp()) / 86400, 0)
+        return 1.0 / (1.0 + days_ago / 7.0)
+    except Exception:
+        return 0.0
+
+
 def _build_context_and_sources(
     results: List[SearchResult],
     max_doc_chars: int = 1200,
@@ -853,7 +902,7 @@ class OpenAIResponsesLLM:
         )
         system_lines.append("CONTEXT에 없는 사실을 만들어내지 마세요.")
         system_lines.append("각 정보의 출처 유형([뉴스] 또는 [커뮤니티])을 답변 내에서 자연스럽게 구분해 주세요.")
-        system_lines.append("답변은 간결하게: 1~2문단(최대 200자) + 요약 bullet 2개로 작성하세요.")
+        system_lines.append("답변은 1~2문단, 150자 이내로 핵심만 간결하게 작성하세요.")
         system_lines.append("기사 제목을 나열하지 말고, 이슈를 자연스럽게 풀어 설명하세요.")
         system_lines.append("답변은 완전한 문장으로 끝내고, 추가 질문이나 제안은 붙이지 마세요.")
 
@@ -875,12 +924,14 @@ class OpenAIResponsesLLM:
             f"[질문]\n{query_text}\n\n"
             f"[CONTEXT]\n{context}\n\n"
             f"[지시사항]\n"
-            f"1) CONTEXT를 근거로 질문에 답변하세요.\n"
-            f"2) [뉴스] 자료는 사실 정보로, [커뮤니티] 자료는 여론/반응으로 구분하여 인용하세요.\n"
-            f"3) CONTEXT가 질문과 전혀 관련 없거나, [EVIDENCE_QUALITY: low]이면 "
-            f"'현재 수집된 데이터에서 관련 근거가 적어요.'라고 전제하고 가능한 범위에서만 답하세요.\n"
-            f"4) CONTEXT에 없는 사실을 만들어내지 마세요.\n"
-            f"5) 완전한 문장으로 마무리하세요. 추가 제안은 붙이지 마세요.\n"
+            f"핵심: CONTEXT만을 근거로 답변하세요. CONTEXT에 없는 사실을 만들어내지 마세요.\n\n"
+            f"출처 구분:\n"
+            f"- [뉴스] 자료 → 사실 정보로 직접 인용 가능\n"
+            f"- [커뮤니티] 자료 → '온라인에서는 ~반응', '커뮤니티에서는 ~의견' 형태로만 인용\n\n"
+            f"근거 부족 시:\n"
+            f"- CONTEXT가 질문과 전혀 관련 없거나 [EVIDENCE_QUALITY: low]이면 "
+            f"'현재 수집된 데이터에서 관련 근거가 적어요.'라고 전제하고 가능한 범위에서만 답변\n\n"
+            f"형식: 완전한 문장으로 마무리하세요. 추가 질문이나 제안은 붙이지 마세요.\n"
         )
         
         # 프롬프트 길이 확인
@@ -1346,9 +1397,20 @@ class RAGService:
         # ========================================
         # LLM 기반 쿼리 재구성 (대화형 → 검색용)
         # ========================================
-        # 예: "요즘 살이 많이 쪘어 어떻게 해야할까?" → "다이어트 체중감량 운동 식단 건강"
-        reformulated_query = self.llm.reformulate_query(query_text, model=final_model)
-        logger.info(f"[RAG 검색] 원본: '{query_text}' → 재구성: '{reformulated_query}'")
+        # 명확한 쿼리(엔티티 2개+ 또는 짧고 구체적)는 재구성 스킵하여 지연/비용 절감
+        pre_entities = _extract_key_entities(query_text)
+        query_tokens = query_text.split()
+        skip_reformulate = (
+            (len(pre_entities) >= 2)
+            or (len(pre_entities) >= 1 and len(query_tokens) <= 4)
+        )
+
+        if skip_reformulate:
+            reformulated_query = query_text
+            logger.info(f"[RAG 검색] 명확한 쿼리이므로 재구성 스킵: '{query_text}' (엔티티: {pre_entities})")
+        else:
+            reformulated_query = self.llm.reformulate_query(query_text, model=final_model)
+            logger.info(f"[RAG 검색] 원본: '{query_text}' → 재구성: '{reformulated_query}'")
 
         # ========================================
         # 하이브리드 검색: 시맨틱 + 키워드
@@ -1420,6 +1482,39 @@ class RAGService:
             }
 
         # ========================================
+        # STEP 0: 시간 스코프 감지 + 날짜 기반 사전 필터
+        # ========================================
+        time_scope_days = _detect_time_scope(
+            query_text,
+            intent_time_focus=intent_info.get("time_focus", ""),
+        )
+        _now_ts = time.time()
+
+        if time_scope_days > 0:
+            from datetime import datetime, timezone, timedelta
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=time_scope_days)
+            cutoff_str = cutoff_dt.isoformat()
+
+            recent_candidates = []
+            for r in candidates:
+                pa = (r.metadata or {}).get("published_at", "")
+                if pa >= cutoff_str:
+                    recent_candidates.append(r)
+
+            # 시간 필터 후 결과가 충분하면 사용, 아니면 원본 유지
+            if len(recent_candidates) >= max(int(top_k), 3):
+                logger.info(
+                    f"[RAG 시간필터] {time_scope_days}일 이내: {len(recent_candidates)}개 "
+                    f"(전체 {len(candidates)}개에서 필터)"
+                )
+                candidates = recent_candidates
+            else:
+                logger.info(
+                    f"[RAG 시간필터] {time_scope_days}일 이내 {len(recent_candidates)}개로 부족, "
+                    f"전체 {len(candidates)}개 유지"
+                )
+
+        # ========================================
         # STEP A: 소스 의도 판별 (LLM 호출 없이 키워드 기반)
         # ========================================
         source_intent = _detect_source_intent(query_text)
@@ -1448,20 +1543,29 @@ class RAGService:
             typed = [r for r in results if _infer_type(r.id, r.metadata) == "news"]
             if typed:
                 results = typed
-            # 없으면 results 그대로 유지 (타입 필터 포기, 있는 문서로 답변)
+                logger.info(f"[RAG 필터] news intent → {len(typed)}개 뉴스 선택")
+            else:
+                logger.warning(f"[RAG 필터] news intent이지만 뉴스 결과 없음, {len(results)}개 전체 결과로 대체")
         elif source_intent == "community":
             typed = [r for r in results if _infer_type(r.id, r.metadata) == "social"]
             if typed:
                 results = typed
-            # 없으면 results 그대로 유지
+                logger.info(f"[RAG 필터] community intent → {len(typed)}개 소셜 선택")
+            else:
+                logger.warning(f"[RAG 필터] community intent이지만 소셜 결과 없음, {len(results)}개 전체 결과로 대체")
 
         # ========================================
-        # STEP D: 절대 거리 게이트 (하드 컷오프 적용, 0건이면 best-distance top_k 유지)
+        # STEP D: 거리 게이트 (하드 → 소프트 → fallback 단계적 적용)
         # ========================================
         force_low_quality = False
         gated = [r for r in results if r.distance <= hard_distance]
-        if gated:
+        if len(gated) >= max(int(top_k) // 2, 1):
+            # 충분한 결과가 하드 게이트 통과
             results = gated
+        elif gated:
+            # 하드 게이트 통과는 적지만 있음 → 소프트 범위로 보충
+            soft_gated = [r for r in results if r.distance <= hard_distance * 1.3 and r not in gated]
+            results = gated + soft_gated
         else:
             # 모든 문서가 하드 게이트 초과 → 거리순 정렬 후 top_k 유지
             results.sort(key=lambda r: r.distance)
@@ -1469,16 +1573,37 @@ class RAGService:
             force_low_quality = True
 
         # ========================================
-        # STEP E: 소프트 거리 선호 기반 정렬 → top_k 선택
+        # STEP E: 키워드 매칭 + 최신성 기반 정렬 → top_k 선택
         # ========================================
+        # 정렬 우선순위:
+        #   1) 엔티티 직접 매칭 보너스 (가장 강력)
+        #   2) 키워드 overlap
+        #   3) 최신성 가산 (시간 민감 쿼리일수록 강하게)
+        #   4) 시맨틱 거리 (tiebreaker)
         final_distance_cutoff = float(_get_setting("RAG_DISTANCE_THRESHOLD", 0.25))
+        has_entities = bool(key_entities)
+        # 시간 민감 쿼리면 recency 가중치를 높임
+        recency_weight = 5.0 if time_scope_days > 0 else 1.0
 
         def _sort_key(r):
             meta = r.metadata or {}
             combined = f"{meta.get('title', '')}\n{meta.get('excerpt', '')}\n{r.document or ''}"
             overlap = _keyword_overlap_count(query_text, combined)
+
+            # 엔티티 직접 매칭 보너스
+            entity_bonus = 0
+            if has_entities:
+                combined_lower = combined.lower()
+                entity_bonus = sum(1 for ent in key_entities if ent.lower() in combined_lower) * 10
+
             within_soft = 1 if r.distance <= final_distance_cutoff else 0
-            return (-within_soft, -overlap, r.distance)
+            # 최신성 점수 (0.0~1.0, 가중치 적용)
+            recency = _recency_score(meta.get("published_at", ""), _now_ts) * recency_weight
+            # 뉴스 미세 우선
+            news_boost = 0.01 if _infer_type(r.id, r.metadata) == "news" else 0
+
+            score = entity_bonus + overlap + within_soft + recency + news_boost
+            return (-score, r.distance)
 
         results.sort(key=_sort_key)
         results = results[:int(top_k)]
@@ -1538,11 +1663,30 @@ class RAGService:
             f"평균={avg_distance:.4f}, evidence_quality={evidence_quality}"
         )
 
+        # 결과 수에 따라 문서당 최대 길이 동적 조절 (개선 6)
+        if len(results) <= 2:
+            max_doc_chars = 1200
+        elif len(results) <= 4:
+            max_doc_chars = 900
+        else:
+            max_doc_chars = 700
+
         context, sources = _build_context_and_sources(
             results,
+            max_doc_chars=max_doc_chars,
             evidence_quality=evidence_quality,
             source_intent=source_intent,
         )
+
+        # intent의 main_intent로 답변 형식 가이드 추가 (개선 3)
+        intent_instruction = ""
+        main_intent = intent_info.get("main_intent", "")
+        if main_intent == "list":
+            intent_instruction = "답변을 항목별로 정리하여 제시하세요."
+        elif main_intent == "analysis":
+            intent_instruction = "원인, 배경, 의미를 구조적으로 분석하여 설명하세요."
+        elif main_intent == "comparison":
+            intent_instruction = "비교 대상의 차이점과 공통점을 중심으로 설명하세요."
         
         # CONTEXT가 비어있는지 확인
         if not context or not context.strip():
@@ -1553,6 +1697,11 @@ class RAGService:
                 "query": query_text,
             }
 
+        # intent_instruction이 있으면 instructions에 합류
+        final_instructions = instructions or ""
+        if intent_instruction:
+            final_instructions = f"{final_instructions}\n{intent_instruction}".strip() if final_instructions else intent_instruction
+
         logger.debug(f"[RAGService.query] LLM 호출 시작 - context 길이: {len(context)}")
         try:
             llm_result = self.llm.answer(
@@ -1562,7 +1711,7 @@ class RAGService:
                 temperature=final_temperature,
                 max_output_tokens=final_max_tokens,
                 reasoning_effort=reasoning_effort,
-                instructions=instructions,
+                instructions=final_instructions or None,
             )
             logger.debug(f"[RAGService.query] LLM 응답 받음 - type: {type(llm_result)}")
             # LLMResult 객체에서 텍스트 추출
