@@ -1,11 +1,13 @@
 # Trend Analyzer - Django + Celery
 FROM python:3.11-slim-bookworm
 
+# Java: PyKomoran(한국어 형태소 분석) 의존
 # git for pip install from git (dcinside-read-api)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     git \
     libpq-dev \
+    openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUNBUFFERED=1 \

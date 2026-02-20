@@ -5,6 +5,7 @@ Celery 작업 모듈
 """
 
 import logging
+from datetime import timedelta
 from typing import Dict, Optional
 
 from celery import shared_task
@@ -634,3 +635,72 @@ def analyze_engagement_keywords_task(
             "error": str(e),
             "analyzed_at": timezone.now().isoformat(),
         }
+
+
+@shared_task(name="analyzer.full_collect_and_analyze_task")
+def full_collect_and_analyze_task(
+    days: int = 7,
+    top_n: int = 50,
+    platform: str = "both",
+):
+    """
+    전체 수집(뉴스 + 소셜미디어) 후 전체 분석을 실행하는 통합 Celery 태스크.
+
+    Celery Beat에서 주기적으로 호출됩니다.
+    - 로컬: 1시간마다 (테스트용)
+    - 서버: 6시간마다 (운영용)
+
+    Args:
+        days: 분석 기간(일). 기본 7
+        top_n: 상위 키워드 개수. 기본 50
+        platform: 플랫폼 (news, sns, both). 기본 both
+    """
+    from data_collector.models import CollectionSession
+    from data_collector.tasks import (
+        collect_all_rss_news_task,
+        collect_all_social_media_task,
+    )
+
+    # 중복 실행 방지: 최근 N분 안에 수집 세션이 실행 중이면 스킵
+    RECENT_MINUTES = 60
+    recent_time = timezone.now() - timedelta(minutes=RECENT_MINUTES)
+    running_sessions = CollectionSession.objects.filter(
+        status="running",
+        started_at__gte=recent_time,
+    )
+    if running_sessions.exists():
+        logger.info(
+            f"full_collect_and_analyze_task 스킵: 최근 {RECENT_MINUTES}분 내 실행 중인 수집 세션 존재 "
+            f"(running: {running_sessions.count()}건)"
+        )
+        return {"status": "skipped", "reason": "이미 수집 세션 실행 중"}
+
+    logger.info("전체 수집+분석 작업 시작")
+
+    # 1. 수집 태스크 큐 등록 (뉴스 + 소셜미디어)
+    news_result = collect_all_rss_news_task.delay()
+    social_result = collect_all_social_media_task.delay()
+    logger.info(
+        f"수집 태스크 등록 완료 - News: {news_result.id}, Social: {social_result.id}"
+    )
+
+    # 2. 분석 태스크 큐 등록 (run_all_analyses --async 와 동일)
+    analyze_keywords_task.delay(days=days, top_n=top_n)
+    compare_platforms_task.delay(days=days, top_n=min(30, top_n))
+    update_hot_keywords.delay(days=min(1, days), top_n=min(20, top_n))
+    analyze_time_lag_task.delay(days=days, top_n=top_n)
+    detect_surge_keywords_task.delay(platform=platform, days=days)
+    analyze_trend_synchronization_task.delay(days=days)
+    analyze_hourly_trends_task.delay(platform=platform, days=days)
+    analyze_engagement_keywords_task.delay(days=days)
+
+    logger.info("8개 분석 태스크 등록 완료 - 전체 수집+분석 작업 큐잉 완료")
+
+    return {
+        "status": "queued",
+        "collection": {
+            "news_task_id": news_result.id,
+            "social_task_id": social_result.id,
+        },
+        "message": "수집 2건 + 분석 8건이 큐에 등록되었습니다.",
+    }
