@@ -454,6 +454,83 @@ def _infer_type(doc_id: str, meta: Optional[Dict[str, Any]] = None) -> str:
     return ""
 
 
+def _search_reddit_by_title(
+    query_text: str,
+    key_entities: List[str],
+    limit: int = 5,
+) -> List[SearchResult]:
+    """
+    Reddit 글을 DB에서 제목 키워드 매칭으로 직접 검색.
+    벡터 검색에서 누락될 수 있는 본문 없는 Reddit 글을 보완.
+
+    1) 추출된 엔티티가 제목에 포함된 Reddit 글 검색
+    2) 엔티티 없으면 쿼리 토큰으로 제목 검색
+    3) SearchResult 포맷으로 변환하여 반환
+    """
+    from django.db.models import Q
+
+    search_terms = key_entities[:3] if key_entities else []
+
+    # 엔티티가 없으면 쿼리에서 2글자 이상 토큰 추출
+    if not search_terms:
+        tokens = _tokens_ko_simple(query_text)
+        search_terms = list(tokens)[:3]
+
+    if not search_terms:
+        return []
+
+    # 제목에 키워드가 포함된 Reddit 글 검색 (OR 조건)
+    q_filter = Q()
+    for term in search_terms:
+        q_filter |= Q(title__icontains=term) | Q(original_title__icontains=term)
+
+    posts = (
+        SocialMediaPost.objects
+        .filter(q_filter, source__platform="reddit")
+        .select_related("source")
+        .order_by("-published_at")[:limit]
+    )
+
+    results: List[SearchResult] = []
+    for post in posts:
+        src = post.source
+        # 제목 + 본문(있으면) 결합하여 document로 사용
+        title = (post.title or "").strip()
+        content = (post.content or "").strip()
+        document = f"{title}\n{content}".strip() if content else title
+
+        meta = {
+            "type": "social",
+            "db_id": post.id,
+            "source_id": post.source_id,
+            "url": post.url or "",
+            "title": title[:200],
+            "published_at": post.published_at.isoformat() if post.published_at else "",
+            "platform": getattr(src, "platform", "reddit"),
+            "identifier": getattr(src, "identifier", ""),
+            "source_display": getattr(src, "display_name", ""),
+            "author": post.author or "",
+            "likes_count": post.likes_count,
+            "comments_count": post.comments_count,
+        }
+        # None 값 제거 (Chroma 호환)
+        meta = {k: v for k, v in meta.items() if v is not None}
+
+        results.append(SearchResult(
+            id=f"reddit_db:{post.id}",
+            document=document,
+            metadata=meta,
+            distance=0.5,  # DB 검색이므로 중간 거리값 부여
+        ))
+
+    if results:
+        logger.info(
+            f"[Reddit DB 검색] 키워드={search_terms} → {len(results)}개 발견"
+        )
+
+    return results
+
+
 def _detect_source_intent(query_text: str) -> str:
     """
     사용자가 뉴스/커뮤니티 중 어떤 출처를 원하는지 키워드 기반으로 판별.
@@ -1489,7 +1566,27 @@ class RAGService:
                 candidates.append(r)
 
         logger.info(f"[RAG 검색] 병합된 후보군: {len(candidates)}개 (키워드: {len(keyword_candidates)}, 시맨틱: {len(semantic_candidates)})")
-        logger.info(f"[RAG 타이밍] 검색(시맨틱+키워드): {time.time() - _t_stage:.2f}s")
+
+        # ========================================
+        # 5) Reddit 제목 DB 검색 (벡터 검색 보완)
+        # ========================================
+        # Reddit 글은 본문이 없는 경우가 많아 벡터 검색에서 누락될 수 있음.
+        # DB에서 제목 키워드 매칭으로 직접 찾아서 후보군에 병합.
+        reddit_db_results = _search_reddit_by_title(
+            query_text=query_text,
+            key_entities=key_entities,
+            limit=5,
+        )
+        reddit_added = 0
+        for r in reddit_db_results:
+            if r.id not in seen_ids:
+                seen_ids.add(r.id)
+                candidates.append(r)
+                reddit_added += 1
+        if reddit_added:
+            logger.info(f"[RAG 검색] Reddit 제목 DB 검색으로 {reddit_added}개 추가")
+
+        logger.info(f"[RAG 타이밍] 검색(시맨틱+키워드+Reddit): {time.time() - _t_stage:.2f}s")
 
         if not candidates:
             logger.warning(f"[RAG 검색] 검색 결과 없음: query={query_text}")
