@@ -1,7 +1,8 @@
 import axios from 'axios'
+import { API_BASE } from '../config'
 
-const DASHBOARD_BASE = 'http://localhost:8000/api/dashboard'
-const ANALYZER_BASE = 'http://localhost:8000/api/analyzer'
+const DASHBOARD_BASE = `${API_BASE}/api/dashboard`
+const ANALYZER_BASE = `${API_BASE}/api/analyzer`
 
 const dashboardApi = axios.create({
   baseURL: DASHBOARD_BASE,

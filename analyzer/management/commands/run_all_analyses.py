@@ -1,22 +1,3 @@
-"""
-전체 트렌드 분석 일괄 실행 관리 명령어
-
-11가지 분석을 한 번에 실행합니다.
-
-사용법:
-    # 기본: 최근 7일 기준, 동기 실행 (Celery 워커 불필요)
-    python manage.py run_all_analyses
-
-    # 최근 30일 기준
-    python manage.py run_all_analyses --days 30
-
-    # Celery로 비동기 실행 (워커 실행 중이어야 함)
-    python manage.py run_all_analyses --async
-
-    # 키워드 필요 분석용 키워드 지정 (키워드 등장 시간, 타임라인, 다중 타임라인)
-    python manage.py run_all_analyses --keyword "트렌드" --keywords "트렌드,분석,뉴스"
-"""
-
 from django.core.management.base import BaseCommand
 
 

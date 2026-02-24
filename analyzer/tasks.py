@@ -642,6 +642,7 @@ def full_collect_and_analyze_task(
     days: int = 7,
     top_n: int = 50,
     platform: str = "both",
+    force: bool = False,
 ):
     """
     전체 수집(뉴스 + 소셜미디어) 후 전체 분석을 실행하는 통합 Celery 태스크.
@@ -654,6 +655,7 @@ def full_collect_and_analyze_task(
         days: 분석 기간(일). 기본 7
         top_n: 상위 키워드 개수. 기본 50
         platform: 플랫폼 (news, sns, both). 기본 both
+        force: True면 '실행 중인 수집 세션' 체크 생략하고 강제 실행 (테스트용)
     """
     from data_collector.models import CollectionSession
     from data_collector.tasks import (
@@ -661,19 +663,20 @@ def full_collect_and_analyze_task(
         collect_all_social_media_task,
     )
 
-    # 중복 실행 방지: 최근 N분 안에 수집 세션이 실행 중이면 스킵
-    RECENT_MINUTES = 60
-    recent_time = timezone.now() - timedelta(minutes=RECENT_MINUTES)
-    running_sessions = CollectionSession.objects.filter(
-        status="running",
-        started_at__gte=recent_time,
-    )
-    if running_sessions.exists():
-        logger.info(
-            f"full_collect_and_analyze_task 스킵: 최근 {RECENT_MINUTES}분 내 실행 중인 수집 세션 존재 "
-            f"(running: {running_sessions.count()}건)"
+    # 중복 실행 방지: 최근 N분 안에 수집 세션이 실행 중이면 스킵 (force=True면 생략)
+    if not force:
+        RECENT_MINUTES = 60
+        recent_time = timezone.now() - timedelta(minutes=RECENT_MINUTES)
+        running_sessions = CollectionSession.objects.filter(
+            status="running",
+            started_at__gte=recent_time,
         )
-        return {"status": "skipped", "reason": "이미 수집 세션 실행 중"}
+        if running_sessions.exists():
+            logger.info(
+                f"full_collect_and_analyze_task 스킵: 최근 {RECENT_MINUTES}분 내 실행 중인 수집 세션 존재 "
+                f"(running: {running_sessions.count()}건)"
+            )
+            return {"status": "skipped", "reason": "이미 수집 세션 실행 중"}
 
     logger.info("전체 수집+분석 작업 시작")
 

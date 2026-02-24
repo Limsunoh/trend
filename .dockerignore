@@ -40,6 +40,10 @@ Thumbs.db
 celerybeat-schedule
 celerybeat.pid
 
+# Frontend (빌드 시 npm ci로 새로 설치)
+frontend/node_modules
+frontend/dist
+
 # Misc
 *.md
 !README.md

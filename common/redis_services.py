@@ -22,7 +22,10 @@ class RedisService:
     """Redis 기본 클래스. 상속 후 self.client로 Redis 접근."""
 
     def __init__(self):
-        """settings의 REDIS_HOST, REDIS_PORT, REDIS_DB로 연결. decode_responses=True로 문자열 반환."""
+        """
+        settings의 REDIS_HOST, REDIS_PORT, REDIS_DB로 연결.
+        decode_responses=True로 문자열 반환.
+        """
         self.client = redis.Redis(
             host=settings.REDIS_HOST,
             port=int(settings.REDIS_PORT),

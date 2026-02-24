@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { dataCollectorAPI } from '../services/api'
-
-const API_BASE = 'http://localhost:8000'
+import { API_BASE } from '../config'
 
 function NewsArticleDetail() {
   const { id } = useParams()

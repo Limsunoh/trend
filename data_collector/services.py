@@ -372,10 +372,12 @@ class RSSCollectorService:
                         published_time = datetime.fromtimestamp(
                             mktime(entry.published_parsed)
                         )
+                        published_time = timezone.make_aware(published_time)
                     elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
                         published_time = datetime.fromtimestamp(
                             mktime(entry.updated_parsed)
                         )
+                        published_time = timezone.make_aware(published_time)
 
                     # description과 thumbnail_url 추출 (HTML 태그 제거 및 이미지 추출)
                     description_text, thumbnail_url = self._get_description_from_entry(

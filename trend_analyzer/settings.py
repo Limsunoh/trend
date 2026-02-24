@@ -14,6 +14,11 @@ from common.sentry_dual_dsn import DualDsnsTransport
 # Load environment variables
 load_dotenv(override=True)
 
+# 로컬 PostgreSQL(Windows)이 UTF-8이 아닌 응답을 보낼 때 UnicodeDecodeError 방지
+# libpq가 연결 시 UTF-8을 쓰도록 강제
+if "PGCLIENTENCODING" not in os.environ:
+    os.environ["PGCLIENTENCODING"] = "UTF8"
+
 # Sentry (에러 수집) - DSN 있으면 초기화. 두 번째 DSN 있으면 동일 이벤트를 두 프로젝트로 전송.
 _sentry_dsn = os.getenv("SENTRY_DSN", "").strip()
 if _sentry_dsn:
@@ -106,14 +111,28 @@ WSGI_APPLICATION = "trend_analyzer.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
+
+def _safe_db_str(value: str) -> str:
+    """로컬 Windows 등에서 .env 인코딩(CP949)으로 인한 UnicodeDecodeError 방지."""
+    if not value:
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    try:
+        value.encode("utf-8")
+        return value
+    except UnicodeEncodeError:
+        return value.encode("cp949", errors="replace").decode("utf-8", errors="replace")
+
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME", "trend_db"),
-        "USER": os.getenv("DB_USER", "team_user"),
-        "PASSWORD": os.getenv("DB_PASSWORD", ""),
-        "HOST": os.getenv("DB_HOST", "localhost"),
-        "PORT": os.getenv("DB_PORT", "5432"),
+        "NAME": _safe_db_str(os.getenv("DB_NAME", "trend_db")),
+        "USER": _safe_db_str(os.getenv("DB_USER", "team_user")),
+        "PASSWORD": _safe_db_str(os.getenv("DB_PASSWORD", "")),
+        "HOST": _safe_db_str(os.getenv("DB_HOST", "localhost")),
+        "PORT": _safe_db_str(os.getenv("DB_PORT", "5432")),
         "OPTIONS": {
             "connect_timeout": 60,
             "client_encoding": "UTF8",
@@ -159,7 +178,12 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
+_STATIC_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
+_FRONTEND_DIST = BASE_DIR / "frontend_dist"
+if _FRONTEND_DIST.exists():
+    STATICFILES_DIRS = [*_STATIC_DIRS, ("frontend", str(_FRONTEND_DIST))]
+else:
+    STATICFILES_DIRS = _STATIC_DIRS
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -190,38 +214,6 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
-
-# Celery Beat Schedule
-# data_collector와 analyzer 태스크를 함께 스케줄링할 수 있습니다.
-#
-# CELERY_BEAT_SCHEDULE = {
-#     # 데이터 수집 (예: 1시간마다)
-#     'collect-all-news': {
-#         'task': 'data_collector.collect_all_rss_news_task',
-#         'schedule': timedelta(hours=1),
-#     },
-#     'collect-all-social': {
-#         'task': 'data_collector.collect_all_social_media_task',
-#         'schedule': timedelta(hours=1),
-#     },
-#     # 데이터 수집 후 분석 (예: 6시간마다)
-#     'analyze-time-lag': {
-#         'task': 'analyzer.analyze_time_lag_task',
-#         'schedule': timedelta(hours=6),
-#     },
-#     'detect-surge-keywords': {
-#         'task': 'analyzer.detect_surge_keywords_task',
-#         'schedule': timedelta(hours=6),
-#     },
-#     'analyze-trend-synchronization': {
-#         'task': 'analyzer.analyze_trend_synchronization_task',
-#         'schedule': timedelta(hours=6),
-#     },
-#     'analyze-hourly-trends': {
-#         'task': 'analyzer.analyze_hourly_trends_task',
-#         'schedule': timedelta(hours=6),
-#     },
-# }
 
 CELERY_BEAT_SCHEDULE = {}
 
@@ -304,6 +296,8 @@ SPECTACULAR_SETTINGS = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:8000",
+    "https://127.0.0.1:8000",
+    "https://127.0.0.1:3000",
 ]
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG

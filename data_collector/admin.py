@@ -264,16 +264,8 @@ class DataCollectionJobAdmin(admin.ModelAdmin):
     duration.short_description = "소요 시간"
 
 
-# SocialMediaPost는 아직 구현되지 않았으므로 기본 Admin만 등록
 @admin.register(SocialMediaPost)
 class SocialMediaPostAdmin(admin.ModelAdmin):
-    """
-    소셜 미디어 게시물 관리 클래스 (TODO)
-
-    현재는 기본 Admin 설정만 되어 있습니다.
-    모델이 구현되면 추가 설정이 필요합니다.
-    """
-
     pass
 
 

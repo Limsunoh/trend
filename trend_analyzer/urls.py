@@ -12,7 +12,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
-from common.views import health_view
+from common.views import health_view, serve_spa
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -29,6 +29,9 @@ urlpatterns = [
         name="swagger-ui",
     ),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+    # SPA catch-all (마지막에 배치)
+    path("", serve_spa),
+    path("<path:path>", serve_spa),
 ]
 
 if settings.DEBUG:

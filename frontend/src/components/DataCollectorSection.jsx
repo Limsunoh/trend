@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { dataCollectorAPI } from '../services/api'
-
-const API_BASE = 'http://localhost:8000'
+import { API_BASE } from '../config'
 const PAGE_SIZE = 50
 
 const NEWS_LIST_COLUMNS = [

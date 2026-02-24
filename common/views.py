@@ -2,9 +2,24 @@
 공통 HTTP 뷰 (health 등)
 """
 
-from django.http import JsonResponse
+from django.conf import settings
+from django.http import FileResponse, Http404, JsonResponse
 
 from common.health import run_health_checks
+
+
+def serve_spa(request, path=""):
+    """
+    SPA(React) catch-all: index.html 반환.
+    /api/, /admin/, /static/, /media/ 가 아닌 경로에서 index.html 제공.
+    """
+    index_path = settings.BASE_DIR / "frontend_dist" / "index.html"
+    if not index_path.exists():
+        raise Http404("Frontend not built")
+    return FileResponse(
+        index_path.open("rb"),
+        content_type="text/html",
+    )
 
 
 def health_view(request):
