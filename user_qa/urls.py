@@ -1,11 +1,7 @@
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .views import (
-    QueryHistoryViewSet,
-    RAGQueryViewSet,
-    ConvertToVectorViewSet,
-)
+from .views import ConvertToVectorViewSet, QueryHistoryViewSet, RAGQueryViewSet
 
 router = DefaultRouter()
 # router.register(r"vectors", VectorDocumentViewSet, basename="vectors")
