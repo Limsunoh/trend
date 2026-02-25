@@ -4,13 +4,13 @@ import { analyzerAPI } from '../services/api'
 
 const ANALYSIS_TYPES = [
   { key: 'keywords', label: '키워드 분석', api: analyzerAPI.getKeywordsAnalysis },
-  { key: 'compare-platforms', label: '플랫폼 비교 분석', api: analyzerAPI.getComparePlatformsAnalysis },
-  { key: 'hot-keywords', label: '인기 키워드 분석', api: analyzerAPI.getHotKeywordsAnalysis },
-  { key: 'time-lag', label: '시간차 분석', api: analyzerAPI.getTimeLagAnalysis },
-  { key: 'surge-keywords', label: '급상승 키워드 분석', api: analyzerAPI.getSurgeKeywordsAnalysis },
-  { key: 'trend-synchronization', label: '트렌드 동기화 분석', api: analyzerAPI.getTrendSynchronizationAnalysis },
-  { key: 'hourly-trends', label: '시간대별 트렌드 분석', api: analyzerAPI.getHourlyTrendsAnalysis },
-  { key: 'engagement-keywords', label: '참여도 기반 키워드 분석', api: analyzerAPI.getEngagementKeywordsAnalysis },
+  { key: 'compare_platforms', label: '플랫폼 비교 분석', api: analyzerAPI.getComparePlatformsAnalysis },
+  { key: 'hot_keywords', label: '인기 키워드 분석', api: analyzerAPI.getHotKeywordsAnalysis },
+  { key: 'time_lag', label: '시간차 분석', api: analyzerAPI.getTimeLagAnalysis },
+  { key: 'surge_keywords', label: '급상승 키워드 분석', api: analyzerAPI.getSurgeKeywordsAnalysis },
+  { key: 'trend_synchronization', label: '트렌드 동기화 분석', api: analyzerAPI.getTrendSynchronizationAnalysis },
+  { key: 'hourly_trends', label: '시간대별 트렌드 분석', api: analyzerAPI.getHourlyTrendsAnalysis },
+  { key: 'engagement_keywords', label: '참여도 기반 키워드 분석', api: analyzerAPI.getEngagementKeywordsAnalysis },
 ]
 
 function AnalyzerSection() {
@@ -133,7 +133,7 @@ function AnalyzerSection() {
                         <td>{item.platform || item.플랫폼 || '-'}</td>
                         <td>{item.days != null ? `${item.days}일` : '-'}</td>
                         <td>
-                          <span className={`badge ${item.status === 'success' || item.상태 === 'success' ? 'success' : 'failed'}`}>
+                          <span className={`badge ${item.status === 'success' || item.상태 === 'success' ? 'success' : item.status === 'failed' || item.상태 === 'failed' ? 'failed' : ''}`}>
                             {item.status || item.상태 || '-'}
                           </span>
                         </td>
