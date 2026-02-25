@@ -468,3 +468,258 @@ code {
     grid-template-columns: 1fr;
   }
 }
+
+/* ========================================
+   Q&A 채팅 섹션
+   ======================================== */
+.qa-wrapper {
+  display: flex;
+  gap: 16px;
+  min-height: 70vh;
+}
+
+.qa-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  padding: 12px;
+  overflow-y: auto;
+  max-height: 75vh;
+}
+
+.qa-sidebar-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #2c3e50;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #3498db;
+}
+
+.qa-new-chat-btn {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 10px;
+  background: #3498db;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.qa-new-chat-btn:hover {
+  background: #2980b9;
+}
+
+.qa-sidebar-empty {
+  font-size: 13px;
+  color: #aaa;
+  text-align: center;
+}
+
+.qa-history-item {
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s;
+}
+
+.qa-history-item:hover {
+  background: #f0f4f8;
+}
+
+.qa-chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  overflow: hidden;
+}
+
+.qa-chat-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid #e0e0e0;
+  font-weight: bold;
+  font-size: 16px;
+  color: #2c3e50;
+}
+
+.qa-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 55vh;
+}
+
+.qa-empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #aaa;
+  font-size: 15px;
+}
+
+.qa-bubble-user {
+  align-self: flex-end;
+  background: #3498db;
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 16px 16px 4px 16px;
+  max-width: 70%;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.qa-bubble-assistant {
+  align-self: flex-start;
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  padding: 10px 16px;
+  border-radius: 16px 16px 16px 4px;
+  max-width: 70%;
+  line-height: 1.6;
+  font-size: 14px;
+  color: #333;
+  white-space: pre-wrap;
+}
+
+.qa-loading-dots {
+  align-self: flex-start;
+  padding: 10px 16px;
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 16px 16px 16px 4px;
+  font-size: 14px;
+  color: #999;
+}
+
+.qa-sources-toggle {
+  margin-top: 6px;
+  background: none;
+  border: none;
+  color: #3498db;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+
+.qa-sources-toggle:hover {
+  text-decoration: underline;
+}
+
+.qa-sources-list {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #f0f4f8;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.qa-source-item {
+  padding: 4px 0;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.qa-source-item:last-child {
+  border-bottom: none;
+}
+
+.qa-source-link {
+  color: #3498db;
+  text-decoration: none;
+}
+
+.qa-source-link:hover {
+  text-decoration: underline;
+}
+
+.qa-source-date {
+  color: #999;
+  margin-left: 8px;
+  font-size: 11px;
+}
+
+.qa-type-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: bold;
+  margin-right: 6px;
+  color: #fff;
+}
+
+.qa-type-badge.news {
+  background: #27ae60;
+}
+
+.qa-type-badge.social {
+  background: #8e44ad;
+}
+
+.qa-input-area {
+  display: flex;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid #e0e0e0;
+  background: #fafafa;
+}
+
+.qa-input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+}
+
+.qa-input:focus {
+  border-color: #3498db;
+}
+
+.qa-send-btn {
+  padding: 10px 20px;
+  background: #3498db;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.qa-send-btn:hover {
+  background: #2980b9;
+}
+
+.qa-send-btn:disabled {
+  background: #bdc3c7;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .qa-wrapper {
+    flex-direction: column;
+  }
+  .qa-sidebar {
+    width: 100%;
+    max-height: 200px;
+  }
+}
