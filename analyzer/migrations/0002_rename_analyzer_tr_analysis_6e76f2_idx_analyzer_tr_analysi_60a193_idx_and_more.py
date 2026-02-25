@@ -9,15 +9,22 @@ class Migration(migrations.Migration):
         ("analyzer", "0001_trend_analysis_result"),
     ]
 
+    # 0004와 중복. merge 시 순서에 따라 한쪽이 실패하므로 둘 다 state만 반영하고,
+    # 실제 DB rename은 0006에서 한 번만 수행.
     operations = [
-        migrations.RenameIndex(
-            model_name="trendanalysisresult",
-            new_name="analyzer_tr_analysi_60a193_idx",
-            old_name="analyzer_tr_analysis_6e76f2_idx",
-        ),
-        migrations.RenameIndex(
-            model_name="trendanalysisresult",
-            new_name="analyzer_tr_analysi_1d0216_idx",
-            old_name="analyzer_tr_analysis_7c4a44_idx",
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.RenameIndex(
+                    model_name="trendanalysisresult",
+                    new_name="analyzer_tr_analysi_60a193_idx",
+                    old_name="analyzer_tr_analysis_6e76f2_idx",
+                ),
+                migrations.RenameIndex(
+                    model_name="trendanalysisresult",
+                    new_name="analyzer_tr_analysi_1d0216_idx",
+                    old_name="analyzer_tr_analysis_7c4a44_idx",
+                ),
+            ],
+            database_operations=[],
         ),
     ]
