@@ -9,15 +9,22 @@ class Migration(migrations.Migration):
         ("analyzer", "0003_update_full_collect_analyze_to_1hour"),
     ]
 
+    # 0002_rename_... 와 동일한 RenameIndex를 함. merge 시 둘 중 하나만 DB에 적용되므로
+    # 0004는 DB 작업 없이 상태만 맞춤 (이미 0002에서 rename 됐을 수 있음).
     operations = [
-        migrations.RenameIndex(
-            model_name="trendanalysisresult",
-            new_name="analyzer_tr_analysi_60a193_idx",
-            old_name="analyzer_tr_analysis_6e76f2_idx",
-        ),
-        migrations.RenameIndex(
-            model_name="trendanalysisresult",
-            new_name="analyzer_tr_analysi_1d0216_idx",
-            old_name="analyzer_tr_analysis_7c4a44_idx",
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.RenameIndex(
+                    model_name="trendanalysisresult",
+                    new_name="analyzer_tr_analysi_60a193_idx",
+                    old_name="analyzer_tr_analysis_6e76f2_idx",
+                ),
+                migrations.RenameIndex(
+                    model_name="trendanalysisresult",
+                    new_name="analyzer_tr_analysi_1d0216_idx",
+                    old_name="analyzer_tr_analysis_7c4a44_idx",
+                ),
+            ],
+            database_operations=[],
         ),
     ]
