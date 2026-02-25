@@ -173,22 +173,18 @@ class RAGCacheService(RedisService):
         self.CACHE_PREFIX = "rag:query:"
         self.CACHE_TTL = 24 * 3600
 
-    def get_cache_key(self, query: str) -> str:
+    def get_cache_key(self, query: str, cache_context: Optional[Dict] = None) -> str:
         """쿼리 정규화(lower, strip) 후 MD5 해시로 캐시 키 생성. 유사 질문 동일 키."""
         normalized = query.lower().strip()
-
-        # 컨텍스트 정보를 캐시 키에 포함
-        # 동일 쿼리라도 top_k, include_sources 등이 다르면 다른 캐시 키 생성
         if cache_context:
             context_str = json.dumps(cache_context, sort_keys=True)
             normalized = f"{normalized}:{context_str}"
-
-        # MD5 해시를 사용하여 고정 길이 키 생성
         query_hash = hashlib.md5(normalized.encode()).hexdigest()
-
         return f"{self.CACHE_PREFIX}{query_hash}"
-    
-    def get_cached_response(self, query: str, cache_context: Optional[Dict] = None) -> Optional[Dict]:
+
+    def get_cached_response(
+        self, query: str, cache_context: Optional[Dict] = None
+    ) -> Optional[Dict]:
         """
         캐시된 답변 조회
 
@@ -212,8 +208,14 @@ class RAGCacheService(RedisService):
             return json.loads(cached)
 
         return None
-    
-    def cache_response(self, query: str, response: Dict, ttl: Optional[int] = None, cache_context: Optional[Dict] = None):
+
+    def cache_response(
+        self,
+        query: str,
+        response: Dict,
+        ttl: Optional[int] = None,
+        cache_context: Optional[Dict] = None,
+    ):
         """
         RAG 응답 캐싱
 
@@ -233,12 +235,8 @@ class RAGCacheService(RedisService):
         ttl = ttl or self.CACHE_TTL
 
         # Redis에 저장
-        self.client.setex(
-            cache_key,
-            ttl,
-            json.dumps(response, ensure_ascii=False)
-        )
-    
+        self.client.setex(cache_key, ttl, json.dumps(response, ensure_ascii=False))
+
     def invalidate_cache(self, query: str):
         """해당 쿼리의 캐시만 삭제. 갱신이 필요할 때 사용."""
         cache_key = self.get_cache_key(query)

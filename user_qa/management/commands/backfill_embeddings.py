@@ -17,6 +17,7 @@
     # Celery 큐에 비동기 등록 (워커 필요)
     python manage.py backfill_embeddings --async
 """
+
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand
@@ -28,7 +29,9 @@ from user_qa.tasks import (
 
 
 class Command(BaseCommand):
-    help = "DB에 저장된 미처리(is_processed=False) 뉴스/소셜 데이터를 소급 임베딩합니다."
+    help = (
+        "DB에 저장된 미처리(is_processed=False) 뉴스/소셜 데이터를 소급 임베딩합니다."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -71,7 +74,12 @@ class Command(BaseCommand):
         use_async = opts["use_async"]
 
         kwargs_news = {"since": None, "collection": collection, "limit": limit}
-        kwargs_social = {"since": None, "collection": collection, "limit": limit, "platform": platform}
+        kwargs_social = {
+            "since": None,
+            "collection": collection,
+            "limit": limit,
+            "platform": platform,
+        }
 
         if use_async:
             self._run_async(data_type, kwargs_news, kwargs_social)
@@ -82,13 +90,21 @@ class Command(BaseCommand):
         """Celery 큐에 비동기 등록"""
         if data_type in ("all", "news"):
             task = embed_recent_news_articles_task.delay(**kwargs_news)
-            self.stdout.write(self.style.SUCCESS(f"[뉴스] Celery 태스크 등록 완료: task_id={task.id}"))
+            self.stdout.write(
+                self.style.SUCCESS(f"[뉴스] Celery 태스크 등록 완료: task_id={task.id}")
+            )
 
         if data_type in ("all", "social"):
             task = embed_recent_social_posts_task.delay(**kwargs_social)
-            self.stdout.write(self.style.SUCCESS(f"[소셜] Celery 태스크 등록 완료: task_id={task.id}"))
+            self.stdout.write(
+                self.style.SUCCESS(f"[소셜] Celery 태스크 등록 완료: task_id={task.id}")
+            )
 
-        self.stdout.write(self.style.WARNING("비동기 모드: Celery embedding 워커가 실행 중이어야 처리됩니다."))
+        self.stdout.write(
+            self.style.WARNING(
+                "비동기 모드: Celery embedding 워커가 실행 중이어야 처리됩니다."
+            )
+        )
 
     def _run_sync(self, data_type, kwargs_news, kwargs_social):
         """현재 프로세스에서 동기 실행 (Celery 불필요)"""
@@ -98,10 +114,12 @@ class Command(BaseCommand):
                 result = embed_recent_news_articles_task.apply(kwargs=kwargs_news)
                 if result.successful():
                     info = result.result
-                    self.stdout.write(self.style.SUCCESS(
-                        f"[뉴스] 완료: 처리기사={info.get('processed_articles', 0)}, "
-                        f"생성청크={info.get('upserted_chunks', 0)}"
-                    ))
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f"[뉴스] 완료: 처리기사={info.get('processed_articles', 0)}, "
+                            f"생성청크={info.get('upserted_chunks', 0)}"
+                        )
+                    )
                 else:
                     self.stderr.write(self.style.ERROR(f"[뉴스] 실패: {result.result}"))
             except Exception as e:
@@ -113,10 +131,12 @@ class Command(BaseCommand):
                 result = embed_recent_social_posts_task.apply(kwargs=kwargs_social)
                 if result.successful():
                     info = result.result
-                    self.stdout.write(self.style.SUCCESS(
-                        f"[소셜] 완료: 처리게시물={info.get('processed_posts', 0)}, "
-                        f"생성청크={info.get('upserted_chunks', 0)}"
-                    ))
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f"[소셜] 완료: 처리게시물={info.get('processed_posts', 0)}, "
+                            f"생성청크={info.get('upserted_chunks', 0)}"
+                        )
+                    )
                 else:
                     self.stderr.write(self.style.ERROR(f"[소셜] 실패: {result.result}"))
             except Exception as e:

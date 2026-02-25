@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from django.core.management.base import BaseCommand
 
+from data_collector.models import NewsArticle, SocialMediaPost
 from user_qa.services import VectorDBService
 from user_qa.tasks import chunk_text
-from data_collector.models import NewsArticle, SocialMediaPost
 
 
 # -------------------------
@@ -71,7 +71,9 @@ class Command(BaseCommand):
         )
 
         news_count = self._index_news(vdb, limit_news, chunk_size, overlap)
-        social_count = self._index_social(vdb, limit_social, chunk_size, overlap, platform_opt=social_platform)
+        social_count = self._index_social(
+            vdb, limit_social, chunk_size, overlap, platform_opt=social_platform
+        )
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -155,7 +157,14 @@ class Command(BaseCommand):
     # - 임베딩: title + content
     # - metadata(필터링): platform(dcinside/reddit), category(소스 카테고리), author 등
     # ---------------------------------------
-    def _index_social(self, vdb: VectorDBService, limit: int, chunk_size: int, overlap: int, platform_opt: str = "all") -> int:
+    def _index_social(
+        self,
+        vdb: VectorDBService,
+        limit: int,
+        chunk_size: int,
+        overlap: int,
+        platform_opt: str = "all",
+    ) -> int:
         qs = SocialMediaPost.objects.select_related("source").order_by("-published_at")
 
         # ✅ 플랫폼 필터링 (source.platform 기반)
@@ -210,28 +219,25 @@ class Command(BaseCommand):
                 raw_meta = {
                     "type": "social",
                     "db_id": int(obj.id),
-                    "source_id": int(obj.source_id) if obj.source_id is not None else None,
+                    "source_id": (
+                        int(obj.source_id) if obj.source_id is not None else None
+                    ),
                     "url": obj.url,
                     "published_at": published_at,
-
                     # 필터링 핵심
-                    "platform": src_platform,     # reddit / dcinside
+                    "platform": src_platform,  # reddit / dcinside
                     "category": src_category,
-                    "identifier": src_identifier, # subreddit / gallery
+                    "identifier": src_identifier,  # subreddit / gallery
                     "source_display": src_display,
-
                     # 선택: 작성자 필터
                     "author": obj.author,
-
                     # ✅ 플랫폼 공통 지표(모델에 존재하는 것만 넣기)
                     "likes_count": getattr(obj, "likes_count", None),
                     "comments_count": getattr(obj, "comments_count", None),
                     "views_count": getattr(obj, "views_count", None),
                     "shares_count": getattr(obj, "shares_count", None),
-
                     # ✅ DCInside/Reddit 등에서 유용한 원본 식별자
                     "platform_post_id": obj.platform_post_id,
-
                     "chunk_index": int(i),
                 }
 
@@ -248,4 +254,3 @@ class Command(BaseCommand):
             vdb.upsert_documents(ids=ids, documents=docs, metadatas=metas)
 
         return total_chunks
-

@@ -1,6 +1,6 @@
 from rest_framework import serializers
-from .models import QueryHistory
 
+from .models import QueryHistory
 
 # ====== Model Serializers ======
 # class VectorDocumentSerializer(serializers.ModelSerializer):
@@ -27,7 +27,9 @@ class QueryHistorySerializer(serializers.ModelSerializer):
 
 class QueryRequestSerializer(serializers.Serializer):
     query = serializers.CharField()
-    top_k = serializers.IntegerField(required=False, default=5, min_value=1, max_value=50)
+    top_k = serializers.IntegerField(
+        required=False, default=5, min_value=1, max_value=50
+    )
     include_sources = serializers.BooleanField(required=False, default=True)
 
     # ✅ (선택) LLM 기반 라우터: 질문 의도/검색 키워드를 한 번에 판별
@@ -38,8 +40,12 @@ class QueryRequestSerializer(serializers.Serializer):
     # LLM 옵션(선택)
     model = serializers.CharField(required=False, allow_blank=True, default="")
     temperature = serializers.FloatField(required=False, allow_null=True, default=None)
-    max_output_tokens = serializers.IntegerField(required=False, allow_null=True, default=None)
-    reasoning_effort = serializers.CharField(required=False, allow_blank=True, default="")
+    max_output_tokens = serializers.IntegerField(
+        required=False, allow_null=True, default=None
+    )
+    reasoning_effort = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
     instructions = serializers.CharField(required=False, allow_blank=True, default="")
     force_refresh = serializers.BooleanField(required=False, default=False)
 

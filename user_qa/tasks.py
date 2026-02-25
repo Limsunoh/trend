@@ -18,9 +18,9 @@ user_qa/tasks.py
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
 import re
 from html import unescape
+from typing import Any, Dict, List, Optional
 
 from celery import shared_task
 from django.conf import settings
@@ -50,7 +50,9 @@ def _get_vdb(collection_name: str) -> VectorDBService:
     """
     vdb = _VDB_CACHE.get(collection_name)
     if vdb is None:
-        logger.info(f"[VectorDB 초기화] 컬렉션={collection_name} (프로세스 내 최초 1회)")
+        logger.info(
+            f"[VectorDB 초기화] 컬렉션={collection_name} (프로세스 내 최초 1회)"
+        )
         vdb = VectorDBService(collection_name=collection_name)
         _VDB_CACHE[collection_name] = vdb
     return vdb
@@ -110,6 +112,7 @@ def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 100) -> List[st
 # ✅ 임베딩 텍스트 구성 헬퍼 (뉴스/소셜 모델에 맞춤)
 # -------------------------
 
+
 def _strip_html(text: str) -> str:
     """RSS description 등에 섞인 HTML 제거(간단 버전)"""
     if not text:
@@ -135,13 +138,11 @@ def build_news_embedding_text(article) -> str:
     """
     title = (getattr(article, "title", "") or "").strip()
     desc = _strip_html(getattr(article, "description", "") or "")
-    author = (getattr(article, "author", "") or "").strip()
     category = (getattr(article, "category", "") or "").strip()
-    url = (getattr(article, "url", "") or "").strip()
 
     # ✅ 임베딩 텍스트는 "내용 중심"으로만 구성 (메타데이터는 Chroma metadata로 따로 저장)
     # - 뉴스: title + description
-    # - (필요 시) author/category/url 등을 본문에 섞고 싶다면 여기서 확장 가능
+    # - (필요 시) author/url 등을 본문에 섞고 싶다면 getattr(article, "author"|"url", "") 추가
     return _safe_join(title, desc, category)
 
 
@@ -250,7 +251,9 @@ def embed_recent_news_articles_task(
 
         qs = qs.order_by("-collected_at")[:limit]
         total_targets = qs.count()
-        logger.info(f"[임베딩 대상 조회 완료][뉴스] 태스크ID={self.request.id} 대상기사수={total_targets}")
+        logger.info(
+            f"[임베딩 대상 조회 완료][뉴스] 태스크ID={self.request.id} 대상기사수={total_targets}"
+        )
 
         ids: List[str] = []
         docs: List[str] = []
@@ -267,12 +270,16 @@ def embed_recent_news_articles_task(
             text = build_news_embedding_text(article)
             if not text:
                 logger.warning(f"[뉴스 임베딩 스킵] 텍스트 없음: news_id={article.id}")
-                processed_ids.append(article.id)  # 무한 재처리 방지(원하면 이 줄 삭제 가능)
+                processed_ids.append(
+                    article.id
+                )  # 무한 재처리 방지(원하면 이 줄 삭제 가능)
                 continue
 
             chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
             if not chunks:
-                logger.warning(f"[뉴스 임베딩 스킵] chunk 생성 실패: news_id={article.id}")
+                logger.warning(
+                    f"[뉴스 임베딩 스킵] chunk 생성 실패: news_id={article.id}"
+                )
                 processed_ids.append(article.id)
                 continue
 
@@ -283,25 +290,32 @@ def embed_recent_news_articles_task(
             # - publisher: 뉴스 소스(중앙일보/네이버/뉴시스 등)
             # - category: 기사 카테고리(없으면 소스 카테고리 fallback)
             publisher = getattr(src, "publisher", None) if src else None
-            category = getattr(article, "category", None) or (getattr(src, "category", None) if src else None)
+            category = getattr(article, "category", None) or (
+                getattr(src, "category", None) if src else None
+            )
 
             base_meta = _only_valid_metadata(
                 {
                     "type": "news",
                     "title": (getattr(article, "title", "") or "")[:200],
                     "db_id": int(article.id),
-                    "source_id": int(article.source_id) if article.source_id is not None else None,
+                    "source_id": (
+                        int(article.source_id)
+                        if article.source_id is not None
+                        else None
+                    ),
                     "url": getattr(article, "url", "") or "",
-                    "published_at": getattr(article, "published_at", None).isoformat()
-                    if getattr(article, "published_at", None)
-                    else "",
+                    "published_at": (
+                        getattr(article, "published_at", None).isoformat()
+                        if getattr(article, "published_at", None)
+                        else ""
+                    ),
                     "publisher": publisher,
                     "category": category or "",
                     "author": getattr(article, "author", "") or "",
                     "chunk_index": 0,  # 아래에서 i로 덮어씀
                 }
             )
-
 
             for i, ch in enumerate(chunks):
                 ids.append(_make_doc_id("news", article.id, i))
@@ -355,7 +369,10 @@ def embed_recent_news_articles_task(
         }
 
     except Exception as e:
-        logger.error(f"[임베딩 실패][뉴스] 태스크ID={self.request.id} 에러={str(e)}", exc_info=True)
+        logger.error(
+            f"[임베딩 실패][뉴스] 태스크ID={self.request.id} 에러={str(e)}",
+            exc_info=True,
+        )
         raise self.retry(exc=e, countdown=60)
 
 
@@ -414,7 +431,9 @@ def embed_recent_social_posts_task(
 
         qs = qs.order_by("-collected_at")[:limit]
         total_targets = qs.count()
-        logger.info(f"[임베딩 대상 조회 완료][커뮤니티] 태스크ID={self.request.id} 대상게시물수={total_targets}")
+        logger.info(
+            f"[임베딩 대상 조회 완료][커뮤니티] 태스크ID={self.request.id} 대상게시물수={total_targets}"
+        )
 
         ids: List[str] = []
         docs: List[str] = []
@@ -431,12 +450,16 @@ def embed_recent_social_posts_task(
             text = build_social_embedding_text(post)
             if not text:
                 logger.warning(f"[소셜 임베딩 스킵] 텍스트 없음: social_id={post.id}")
-                processed_ids.append(post.id)  # 무한 재처리 방지(원하면 이 줄 삭제 가능)
+                processed_ids.append(
+                    post.id
+                )  # 무한 재처리 방지(원하면 이 줄 삭제 가능)
                 continue
 
             chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
             if not chunks:
-                logger.warning(f"[소셜 임베딩 스킵] chunk 생성 실패: social_id={post.id}")
+                logger.warning(
+                    f"[소셜 임베딩 스킵] chunk 생성 실패: social_id={post.id}"
+                )
                 processed_ids.append(post.id)
                 continue
 
@@ -455,30 +478,29 @@ def embed_recent_social_posts_task(
                     "type": "social",
                     "title": (getattr(post, "title", "") or "")[:200],
                     "db_id": int(post.id),
-                    "source_id": int(post.source_id) if post.source_id is not None else None,
+                    "source_id": (
+                        int(post.source_id) if post.source_id is not None else None
+                    ),
                     "url": getattr(post, "url", "") or "",
-                    "published_at": getattr(post, "published_at", None).isoformat()
-                    if getattr(post, "published_at", None)
-                    else "",
-
+                    "published_at": (
+                        getattr(post, "published_at", None).isoformat()
+                        if getattr(post, "published_at", None)
+                        else ""
+                    ),
                     # ✅ 필터링 핵심
-                    "platform": src_platform,            # reddit / dcinside
-                    "category": src_category or "",     # ex) 갤러리/서브레딧 카테고리
-                    "identifier": src_identifier,        # subreddit / gallery
-                    "source_display": src_display,       # UI 표기용 이름
-
+                    "platform": src_platform,  # reddit / dcinside
+                    "category": src_category or "",  # ex) 갤러리/서브레딧 카테고리
+                    "identifier": src_identifier,  # subreddit / gallery
+                    "source_display": src_display,  # UI 표기용 이름
                     # (선택) 작성자
                     "author": getattr(post, "author", "") or "",
-
                     # ✅ 플랫폼 공통 지표(모델에 존재하는 것만)
                     "likes_count": getattr(post, "likes_count", None),
                     "comments_count": getattr(post, "comments_count", None),
                     "views_count": getattr(post, "views_count", None),
                     "shares_count": getattr(post, "shares_count", None),
-
                     # ✅ 원본 식별자
                     "platform_post_id": getattr(post, "platform_post_id", None),
-
                     "chunk_index": 0,  # 아래에서 i로 덮어씀
                 }
             )
@@ -514,7 +536,9 @@ def embed_recent_social_posts_task(
             if _model_has_field(SocialMediaPost, "processed_at"):
                 update_kwargs["processed_at"] = timezone.now()
             with transaction.atomic():
-                SocialMediaPost.objects.filter(id__in=processed_ids).update(**update_kwargs)
+                SocialMediaPost.objects.filter(id__in=processed_ids).update(
+                    **update_kwargs
+                )
 
         logger.info(
             f"[임베딩 완료][커뮤니티] 태스크ID={self.request.id} "
@@ -535,5 +559,8 @@ def embed_recent_social_posts_task(
         }
 
     except Exception as e:
-        logger.error(f"[임베딩 실패][커뮤니티] 태스크ID={self.request.id} 에러={str(e)}", exc_info=True)
+        logger.error(
+            f"[임베딩 실패][커뮤니티] 태스크ID={self.request.id} 에러={str(e)}",
+            exc_info=True,
+        )
         raise self.retry(exc=e, countdown=60)

@@ -20,4 +20,3 @@ class QueryHistory(models.Model):
 class VectorDocument(models.Model):
     pass
 """
-

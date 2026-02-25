@@ -89,9 +89,6 @@ def store_analysis_result(
     분석 결과를 DB에 저장.
     - result/summary 내 리스트는 최대 MAX_LIST_ITEMS_STORED(15)개만 저장.
     - 저장 후 해당 analysis_type은 최신 RETENTION_PER_ANALYSIS_TYPE(50)건만 유지.
-    분석 결과를 DB에 저장.
-    - result/summary 내 리스트는 최대 MAX_LIST_ITEMS_STORED(15)개만 저장.
-    - 저장 후 해당 analysis_type은 최신 RETENTION_PER_ANALYSIS_TYPE(50)건만 유지.
     """
     # 리스트 15개로 자른 뒤 JSON 안전 변환
     trimmed_result = trim_lists_to_n(copy.deepcopy(result), MAX_LIST_ITEMS_STORED)
@@ -100,9 +97,6 @@ def store_analysis_result(
 
     safe_result = _make_json_safe(trimmed_result)
     safe_parameters = _make_json_safe(parameters or {})
-    safe_summary = _make_json_safe(trimmed_summary)
-
-    row = TrendAnalysisResult.objects.create(
     safe_summary = _make_json_safe(trimmed_summary)
 
     row = TrendAnalysisResult.objects.create(
@@ -115,9 +109,6 @@ def store_analysis_result(
         summary=safe_summary,
         result_data=safe_result,
     )
-    # analysis_type별 최신 50건만 유지
-    _retain_latest_per_analysis_type(analysis_type, RETENTION_PER_ANALYSIS_TYPE)
-    return row
     # analysis_type별 최신 50건만 유지
     _retain_latest_per_analysis_type(analysis_type, RETENTION_PER_ANALYSIS_TYPE)
     return row

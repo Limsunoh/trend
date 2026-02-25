@@ -268,7 +268,6 @@ class NewsArticleSerializer(serializers.ModelSerializer):
 
         model = NewsArticle
 
-
         # 모든 필드 포함
         fields = "__all__"
 

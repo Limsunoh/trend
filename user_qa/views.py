@@ -1,6 +1,6 @@
 import logging
 
-from rest_framework import viewsets, status
+from rest_framework import status, viewsets
 from rest_framework.response import Response
 
 from .models import QueryHistory
@@ -18,6 +18,7 @@ class QueryHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
     질의응답 히스토리 조회
     """
+
     queryset = QueryHistory.objects.all().order_by("-id")
     serializer_class = QueryHistorySerializer
 
@@ -27,6 +28,7 @@ class RAGQueryViewSet(viewsets.ViewSet):
     ✅ RAG + OpenAI LLM 질의응답 엔드포인트
     - POST /api/user_qa/query/
     """
+
     http_method_names = ["post"]
 
     def get_serializer_class(self):
@@ -68,16 +70,20 @@ class RAGQueryViewSet(viewsets.ViewSet):
                 instructions=instructions,
             )
         except Exception as e:
-            logger.error(f"[VIEW] rag.query() 예외: {type(e).__name__}: {str(e)}", exc_info=True)
+            logger.error(
+                f"[VIEW] rag.query() 예외: {type(e).__name__}: {str(e)}", exc_info=True
+            )
             raise
 
-        out = QueryResponseSerializer(data={
-            "query": result.get("query", query_text),
-            "answer": result.get("answer", ""),
-            "history_id": result.get("history_id"),
-            "sources": result.get("sources", []),
-            "model": result.get("model", ""),
-        })
+        out = QueryResponseSerializer(
+            data={
+                "query": result.get("query", query_text),
+                "answer": result.get("answer", ""),
+                "history_id": result.get("history_id"),
+                "sources": result.get("sources", []),
+                "model": result.get("model", ""),
+            }
+        )
         out.is_valid(raise_exception=True)
 
         return Response(out.data, status=status.HTTP_200_OK)
@@ -93,6 +99,7 @@ class ConvertToVectorViewSet(viewsets.ViewSet):
         - limit: 최대 처리 건수 (기본값: 5000)
         - platform: 소셜 플랫폼 필터 (reddit/dcinside, 기본값: None=전체)
     """
+
     http_method_names = ["post"]
 
     def create(self, request):
@@ -108,7 +115,9 @@ class ConvertToVectorViewSet(viewsets.ViewSet):
 
         if data_type not in ("all", "news", "social"):
             return Response(
-                {"error": f"type은 all/news/social 중 하나여야 합니다. (입력값: {data_type})"},
+                {
+                    "error": f"type은 all/news/social 중 하나여야 합니다. (입력값: {data_type})"
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -116,17 +125,26 @@ class ConvertToVectorViewSet(viewsets.ViewSet):
 
         if data_type in ("all", "news"):
             task = embed_recent_news_articles_task.delay(
-                since=None, collection=collection, limit=limit,
+                since=None,
+                collection=collection,
+                limit=limit,
             )
             tasks["news_task_id"] = task.id
-            logger.info(f"[ConvertToVector] 뉴스 소급 임베딩 태스크 등록: task_id={task.id}")
+            logger.info(
+                f"[ConvertToVector] 뉴스 소급 임베딩 태스크 등록: task_id={task.id}"
+            )
 
         if data_type in ("all", "social"):
             task = embed_recent_social_posts_task.delay(
-                since=None, collection=collection, platform=platform, limit=limit,
+                since=None,
+                collection=collection,
+                platform=platform,
+                limit=limit,
             )
             tasks["social_task_id"] = task.id
-            logger.info(f"[ConvertToVector] 소셜 소급 임베딩 태스크 등록: task_id={task.id}")
+            logger.info(
+                f"[ConvertToVector] 소셜 소급 임베딩 태스크 등록: task_id={task.id}"
+            )
 
         return Response(
             {

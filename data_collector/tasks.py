@@ -140,9 +140,7 @@ def collect_all_rss_news_task():
     """
     # 수집 세션 생성
     session = CollectionSession.objects.create(
-        status="running",
-        started_at=timezone.now(),
-        notes="session_type:news"
+        status="running", started_at=timezone.now(), notes="session_type:news"
     )
 
     # 활성화된 모든 RSS 소스 조회
@@ -231,25 +229,25 @@ def _trigger_embedding_for_session(session_id: int, session_type: str):
     try:
         triggered_tasks = []
 
-        if session_type in ('news', 'unknown'):
+        if session_type in ("news", "unknown"):
             task = current_app.send_task(
-                'user_qa.tasks.embed_recent_news_articles_task',
-                kwargs={'since': None, 'collection': None, 'limit': 5000},
-                queue='embedding',
+                "user_qa.tasks.embed_recent_news_articles_task",
+                kwargs={"since": None, "collection": None, "limit": 5000},
+                queue="embedding",
             )
-            triggered_tasks.append(('news', task.id))
+            triggered_tasks.append(("news", task.id))
             logger.info(
                 f"[자동 임베딩 트리거][뉴스] 세션 #{session_id} 완료 후 "
                 f"임베딩 태스크 등록: task_id={task.id}"
             )
 
-        if session_type in ('social', 'unknown'):
+        if session_type in ("social", "unknown"):
             task = current_app.send_task(
-                'user_qa.tasks.embed_recent_social_posts_task',
-                kwargs={'since': None, 'collection': None, 'limit': 5000},
-                queue='embedding',
+                "user_qa.tasks.embed_recent_social_posts_task",
+                kwargs={"since": None, "collection": None, "limit": 5000},
+                queue="embedding",
             )
-            triggered_tasks.append(('social', task.id))
+            triggered_tasks.append(("social", task.id))
             logger.info(
                 f"[자동 임베딩 트리거][소셜] 세션 #{session_id} 완료 후 "
                 f"임베딩 태스크 등록: task_id={task.id}"
@@ -265,8 +263,7 @@ def _trigger_embedding_for_session(session_id: int, session_type: str):
 
     except Exception as e:
         logger.error(
-            f"[자동 임베딩 트리거 실패] 세션 #{session_id}: {str(e)}",
-            exc_info=True
+            f"[자동 임베딩 트리거 실패] 세션 #{session_id}: {str(e)}", exc_info=True
         )
         return []
 
@@ -303,36 +300,38 @@ def check_session_completion(session_id: int):
         return
 
     # 세션 시작 이후의 작업 확인
-    jobs = DataCollectionJob.objects.filter(
-        started_at__gte=session.started_at
-    )
+    jobs = DataCollectionJob.objects.filter(started_at__gte=session.started_at)
 
     # ✅ 세션 타입 판별: notes 필드에 저장된 session_type 사용 (동시 수집 시 혼선 방지)
     session_type_from_notes = None
-    if session.notes and 'session_type:' in (session.notes or ''):
-        session_type_from_notes = session.notes.split('session_type:')[-1].strip().split()[0]
+    if session.notes and "session_type:" in (session.notes or ""):
+        session_type_from_notes = (
+            session.notes.split("session_type:")[-1].strip().split()[0]
+        )
 
-    if session_type_from_notes == 'news':
+    if session_type_from_notes == "news":
         news_content_type = ContentType.objects.get_for_model(NewsSource)
         jobs = jobs.filter(content_type=news_content_type)
-    elif session_type_from_notes == 'social':
+    elif session_type_from_notes == "social":
         social_content_type = ContentType.objects.get_for_model(SocialMediaSource)
         jobs = jobs.filter(content_type=social_content_type)
     else:
         # notes가 없는 레거시 세션: 기존 방식(first_job 기반)으로 fallback
-        first_job = jobs.order_by('started_at').first()
+        first_job = jobs.order_by("started_at").first()
         if first_job and first_job.content_type:
-            if first_job.content_type.model == 'newssource':
+            if first_job.content_type.model == "newssource":
                 news_content_type = ContentType.objects.get_for_model(NewsSource)
                 jobs = jobs.filter(content_type=news_content_type)
-            elif first_job.content_type.model == 'socialmediasource':
-                social_content_type = ContentType.objects.get_for_model(SocialMediaSource)
+            elif first_job.content_type.model == "socialmediasource":
+                social_content_type = ContentType.objects.get_for_model(
+                    SocialMediaSource
+                )
                 jobs = jobs.filter(content_type=social_content_type)
-    
-    completed_jobs = jobs.filter(status='completed').count()
-    failed_jobs = jobs.filter(status='failed').count()
-    running_jobs = jobs.filter(status='running').count()
-    
+
+    completed_jobs = jobs.filter(status="completed").count()
+    failed_jobs = jobs.filter(status="failed").count()
+    running_jobs = jobs.filter(status="running").count()
+
     # 모든 작업 완료 여부 확인
     time_since_start = timezone.now() - session.started_at
     all_tasks_done = (
@@ -403,7 +402,7 @@ def check_session_completion(session_id: int):
                 )
 
             # ✅ 자동 임베딩 트리거: 세션 완료 후 수집된 데이터를 벡터DB에 임베딩
-            embedding_session_type = session_type_from_notes or 'unknown'
+            embedding_session_type = session_type_from_notes or "unknown"
             _trigger_embedding_for_session(session.id, embedding_session_type)
     else:
         # 아직 완료되지 않았으면 5분 후 다시 체크
@@ -597,9 +596,7 @@ def collect_all_social_media_task():
     """
     # 수집 세션 생성
     session = CollectionSession.objects.create(
-        status='running',
-        started_at=timezone.now(),
-        notes='session_type:social'
+        status="running", started_at=timezone.now(), notes="session_type:social"
     )
 
     # 활성화된 모든 소셜 미디어 소스 조회

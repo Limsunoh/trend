@@ -1,26 +1,27 @@
 """
 벡터DB 및 RAG 서비스
 """
-import os
-import time
+
 import logging
+import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from django.conf import settings
-
 import chromadb
 from chromadb.config import Settings as ChromaSettings
+from django.conf import settings
+from django.db.models import Max
 from sentence_transformers import SentenceTransformer
 
 from common.redis_services import RAGCacheService
-from .models import QueryHistory
-from django.db.models import Max
 from data_collector.models import NewsArticle, SocialMediaPost
 
+from .models import QueryHistory
 
 logger = logging.getLogger(__name__)
+
 
 def _get_setting(name: str, default: Any = None) -> Any:
     return getattr(settings, name, default)
@@ -49,7 +50,9 @@ class VectorDBService:
 
     def __init__(self, collection_name: str | None = None):
         self.persist_dir: str = str(_get_setting("CHROMA_PERSIST_DIR", "./chroma_db"))
-        self.collection_name: str = collection_name or _get_setting("CHROMA_COLLECTION", "trend_docs")
+        self.collection_name: str = collection_name or _get_setting(
+            "CHROMA_COLLECTION", "trend_docs"
+        )
 
         model_name: str = _get_setting(
             "EMBEDDING_MODEL",
@@ -61,7 +64,9 @@ class VectorDBService:
             path=self.persist_dir,
             settings=ChromaSettings(anonymized_telemetry=False),
         )
-        self.collection = self.client.get_or_create_collection(name=self.collection_name)
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name
+        )
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
         vectors = self.embedder.encode(
@@ -95,7 +100,7 @@ class VectorDBService:
         distance_threshold: float = 0.15,
         fetch_multiplier: int = 2,
         *,
-        balance_types: bool = True,   # ✅ 추가
+        balance_types: bool = True,  # ✅ 추가
     ) -> List[SearchResult]:
         """
         유사도 검색
@@ -150,8 +155,12 @@ class VectorDBService:
         # ---------------------------
         # (기존 로직 유지) 타입별로 균형 있게 선택
         # ---------------------------
-        news_results = [r for r in candidates if _infer_type(r.id, r.metadata) == "news"]
-        social_results = [r for r in candidates if _infer_type(r.id, r.metadata) == "social"]
+        news_results = [
+            r for r in candidates if _infer_type(r.id, r.metadata) == "news"
+        ]
+        social_results = [
+            r for r in candidates if _infer_type(r.id, r.metadata) == "social"
+        ]
         balanced_results = []
 
         if news_results:
@@ -228,9 +237,7 @@ class VectorDBService:
         # 거리순 정렬
         all_results.sort(key=lambda x: x.distance)
 
-        logger.debug(
-            f"[keyword_search] 키워드 {keywords} → {len(all_results)}개 결과"
-        )
+        logger.debug(f"[keyword_search] 키워드 {keywords} → {len(all_results)}개 결과")
 
         return all_results[:top_k]
 
@@ -257,20 +264,64 @@ def _extract_key_entities(query_text: str) -> List[str]:
     entities: List[str] = []
 
     common_words = {
-        "최근", "요즘", "오늘", "내일", "어제", "지금", "우리", "그들", "여기", "거기",
-        "어떻게", "무엇", "언제", "어디", "왜", "누가", "얼마나",
-        "정말", "아주", "매우", "너무", "조금", "많이", "적게",
-        "그리고", "하지만", "그러나", "또한", "그래서", "따라서",
-        "대통령", "장관", "의원", "기자", "교수", "대표", "사장",
-        "생각", "의견", "반응", "전망", "분석", "정리", "요약",
-        "상황", "현황", "동향", "추세", "변화", "영향", "결과",
+        "최근",
+        "요즘",
+        "오늘",
+        "내일",
+        "어제",
+        "지금",
+        "우리",
+        "그들",
+        "여기",
+        "거기",
+        "어떻게",
+        "무엇",
+        "언제",
+        "어디",
+        "왜",
+        "누가",
+        "얼마나",
+        "정말",
+        "아주",
+        "매우",
+        "너무",
+        "조금",
+        "많이",
+        "적게",
+        "그리고",
+        "하지만",
+        "그러나",
+        "또한",
+        "그래서",
+        "따라서",
+        "대통령",
+        "장관",
+        "의원",
+        "기자",
+        "교수",
+        "대표",
+        "사장",
+        "생각",
+        "의견",
+        "반응",
+        "전망",
+        "분석",
+        "정리",
+        "요약",
+        "상황",
+        "현황",
+        "동향",
+        "추세",
+        "변화",
+        "영향",
+        "결과",
     }
 
     # 1. 공백 기준 토큰 분리 → 조사 제거 → 엔티티 판별
     tokens = query.split()
     for token in tokens:
         # 영문 고유명사 (대문자로 시작하거나 전체 대문자)
-        eng_match = re.match(r'^([A-Z][a-zA-Z]*|[A-Z]{2,})\b', token)
+        eng_match = re.match(r"^([A-Z][a-zA-Z]*|[A-Z]{2,})\b", token)
         if eng_match:
             word = eng_match.group(1)
             if len(word) >= 2 and word not in entities:
@@ -278,7 +329,7 @@ def _extract_key_entities(query_text: str) -> List[str]:
             continue
 
         # 한글이 포함되지 않은 토큰은 스킵
-        if not re.search(r'[가-힣]', token):
+        if not re.search(r"[가-힣]", token):
             continue
 
         # 한글 토큰: 조사 제거
@@ -289,26 +340,30 @@ def _extract_key_entities(query_text: str) -> List[str]:
             continue
 
         # 2-4글자 순수 한글 → 엔티티 후보
-        if re.match(r'^[가-힣]{2,4}$', stripped) and stripped not in entities:
+        if re.match(r"^[가-힣]{2,4}$", stripped) and stripped not in entities:
             entities.append(stripped)
             continue
 
         # 5글자 이상: 동사/어미 접미사를 제거하여 명사 추출
         # 예: "비트코인알려줘" → "비트코인", "트럼프어떻게생각해" → "트럼프"
-        if len(stripped) >= 5 and re.match(r'^[가-힣]+$', stripped):
+        if len(stripped) >= 5 and re.match(r"^[가-힣]+$", stripped):
             for suffix in _VERB_SUFFIXES:
                 if stripped.endswith(suffix) and len(stripped) > len(suffix):
-                    candidate = stripped[:-len(suffix)]
-                    if (2 <= len(candidate) <= 4
-                            and candidate not in _STOP_TOKENS
-                            and candidate not in common_words
-                            and candidate not in entities):
+                    candidate = stripped[: -len(suffix)]
+                    if (
+                        2 <= len(candidate) <= 4
+                        and candidate not in _STOP_TOKENS
+                        and candidate not in common_words
+                        and candidate not in entities
+                    ):
                         entities.append(candidate)
                     break
 
     # 2. 한글 복합어/기관명 (전체 텍스트에서 검색)
     # 예: 삼성전자, 현대자동차, 민주당, 국민의힘
-    compound_pattern = re.compile(r'([가-힣]{3,}(?:전자|자동차|그룹|증권|은행|보험|제약|바이오|엔터|미디어|당|의힘|연합|연대|회의|위원회|청와대|국회|정부))')
+    compound_pattern = re.compile(
+        r"([가-힣]{3,}(?:전자|자동차|그룹|증권|은행|보험|제약|바이오|엔터|미디어|당|의힘|연합|연대|회의|위원회|청와대|국회|정부))"
+    )
     for match in compound_pattern.finditer(query):
         word = match.group(1)
         if word not in entities:
@@ -319,29 +374,77 @@ def _extract_key_entities(query_text: str) -> List[str]:
 
 
 _STOP_TOKENS = {
-    "관련", "관련된", "이슈", "알려줘", "뉴스", "소식", "정리", "오늘", "요즘", "사건", "이벤트", "트렌드",
-    "대해", "대한", "대해서", "무엇", "어떤", "어떻게", "알려", "설명", "해줘",
+    "관련",
+    "관련된",
+    "이슈",
+    "알려줘",
+    "뉴스",
+    "소식",
+    "정리",
+    "오늘",
+    "요즘",
+    "사건",
+    "이벤트",
+    "트렌드",
+    "대해",
+    "대한",
+    "대해서",
+    "무엇",
+    "어떤",
+    "어떻게",
+    "알려",
+    "설명",
+    "해줘",
 }
 
 # 5글자 이상 토큰에서 동사/어미 접미사를 제거하기 위한 패턴 (긴 것부터 매칭)
 _VERB_SUFFIXES = [
-    "어떻게생각해", "어떻게됐어", "어떻게해",
-    "알려줘봐", "알려줘요", "알려주세요", "알려달라", "알려줄래",
-    "해줘요", "봐줘요", "줘봐요",
-    "있나요", "있어요", "인가요", "일까요", "인데요",
-    "알려줘", "해줘", "봐줘", "줘봐", "할까", "일까", "인가",
-    "뭐야", "뭐냐", "뭐임",
-    "있어", "있나", "있냐", "인지", "인데", "이야",
-    "했던", "한다", "했다", "하는",
-    "줘", "해",
+    "어떻게생각해",
+    "어떻게됐어",
+    "어떻게해",
+    "알려줘봐",
+    "알려줘요",
+    "알려주세요",
+    "알려달라",
+    "알려줄래",
+    "해줘요",
+    "봐줘요",
+    "줘봐요",
+    "있나요",
+    "있어요",
+    "인가요",
+    "일까요",
+    "인데요",
+    "알려줘",
+    "해줘",
+    "봐줘",
+    "줘봐",
+    "할까",
+    "일까",
+    "인가",
+    "뭐야",
+    "뭐냐",
+    "뭐임",
+    "있어",
+    "있나",
+    "있냐",
+    "인지",
+    "인데",
+    "이야",
+    "했던",
+    "한다",
+    "했다",
+    "하는",
+    "줘",
+    "해",
 ]
 
 # 한국어 조사 제거 패턴 (긴 조사를 먼저 매칭하여 오동작 방지)
 _KO_PARTICLE_RE = re.compile(
-    r'(?:에서의|으로의|에서도|으로도|에서는|이라는|'
-    r'관련|관한|따른|대해|대한|관해|통해|위해|위한|'
-    r'에서|으로|에게|한테|부터|까지|처럼|보다|라고|이라|라는|에는|에도|'
-    r'은|는|이|가|을|를|에|의|와|과|로|도|만|께|된)$'
+    r"(?:에서의|으로의|에서도|으로도|에서는|이라는|"
+    r"관련|관한|따른|대해|대한|관해|통해|위해|위한|"
+    r"에서|으로|에게|한테|부터|까지|처럼|보다|라고|이라|라는|에는|에도|"
+    r"은|는|이|가|을|를|에|의|와|과|로|도|만|께|된)$"
 )
 
 
@@ -366,15 +469,16 @@ def _tokens_ko_simple(s: str) -> set[str]:
     for t in raw_toks:
         stripped = _strip_ko_particles(t)
         # 5글자 이상 한글 토큰: 동사/어미 접미사 제거 (예: "뉴스알려줘" → "뉴스")
-        if len(stripped) >= 5 and re.match(r'^[가-힣]+$', stripped):
+        if len(stripped) >= 5 and re.match(r"^[가-힣]+$", stripped):
             for suffix in _VERB_SUFFIXES:
                 if stripped.endswith(suffix) and len(stripped) > len(suffix):
-                    candidate = stripped[:-len(suffix)]
+                    candidate = stripped[: -len(suffix)]
                     if len(candidate) >= 2:
                         stripped = candidate
                     break
         toks.add(stripped)
     return toks - _STOP_TOKENS
+
 
 def _keyword_overlap_count(query: str, text: str) -> int:
     """
@@ -395,6 +499,7 @@ def _keyword_overlap_count(query: str, text: str) -> int:
             # 토큰화에서 놓쳤지만 substring으로는 존재하는 경우에만 추가
             score += 1
     return score
+
 
 def rank_results_generic(
     query_text: str,
@@ -437,7 +542,6 @@ def rank_results_generic(
         picked.extend(rest[: final_k - len(picked)])
 
     return picked[:final_k]
-
 
 
 def _infer_type(doc_id: str, meta: Optional[Dict[str, Any]] = None) -> str:
@@ -485,8 +589,7 @@ def _search_reddit_by_title(
         q_filter |= Q(title__icontains=term) | Q(original_title__icontains=term)
 
     posts = (
-        SocialMediaPost.objects
-        .filter(q_filter, source__platform="reddit")
+        SocialMediaPost.objects.filter(q_filter, source__platform="reddit")
         .select_related("source")
         .order_by("-published_at")[:limit]
     )
@@ -516,17 +619,17 @@ def _search_reddit_by_title(
         # None 값 제거 (Chroma 호환)
         meta = {k: v for k, v in meta.items() if v is not None}
 
-        results.append(SearchResult(
-            id=f"reddit_db:{post.id}",
-            document=document,
-            metadata=meta,
-            distance=0.5,  # DB 검색이므로 중간 거리값 부여
-        ))
+        results.append(
+            SearchResult(
+                id=f"reddit_db:{post.id}",
+                document=document,
+                metadata=meta,
+                distance=0.5,  # DB 검색이므로 중간 거리값 부여
+            )
+        )
 
     if results:
-        logger.info(
-            f"[Reddit DB 검색] 키워드={search_terms} → {len(results)}개 발견"
-        )
+        logger.info(f"[Reddit DB 검색] 키워드={search_terms} → {len(results)}개 발견")
 
     return results
 
@@ -541,17 +644,52 @@ def _detect_source_intent(query_text: str) -> str:
     q = (query_text or "").strip().lower()
 
     news_keywords = [
-        "뉴스", "기사", "보도", "언론", "신문", "매체",
-        "보도자료", "속보", "헤드라인",
-        "방송", "취재", "리포트", "보도내용",
-        "news", "article", "press", "report",
+        "뉴스",
+        "기사",
+        "보도",
+        "언론",
+        "신문",
+        "매체",
+        "보도자료",
+        "속보",
+        "헤드라인",
+        "방송",
+        "취재",
+        "리포트",
+        "보도내용",
+        "news",
+        "article",
+        "press",
+        "report",
     ]
     community_keywords = [
-        "커뮤니티", "게시글", "게시판", "반응", "여론", "댓글",
-        "디시", "dcinside", "레딧", "reddit",
-        "갤러리", "유저", "네티즌", "온라인반응", "온라인 반응",
-        "SNS", "소셜", "트위터", "엑스", "인스타", "페이스북",
-        "유튜브", "블로그", "카페", "클리앙", "루리웹", "에펨코리아",
+        "커뮤니티",
+        "게시글",
+        "게시판",
+        "반응",
+        "여론",
+        "댓글",
+        "디시",
+        "dcinside",
+        "레딧",
+        "reddit",
+        "갤러리",
+        "유저",
+        "네티즌",
+        "온라인반응",
+        "온라인 반응",
+        "SNS",
+        "소셜",
+        "트위터",
+        "엑스",
+        "인스타",
+        "페이스북",
+        "유튜브",
+        "블로그",
+        "카페",
+        "클리앙",
+        "루리웹",
+        "에펨코리아",
     ]
 
     has_news = any(kw in q for kw in news_keywords)
@@ -582,8 +720,22 @@ def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
         return 7
 
     # 중간 시간 신호
-    if any(kw in q for kw in ["최근", "최신", "요즘", "요새", "핫한", "핫이슈",
-                                "트렌드", "트렌딩", "인기", "화제", "떠오르는"]):
+    if any(
+        kw in q
+        for kw in [
+            "최근",
+            "최신",
+            "요즘",
+            "요새",
+            "핫한",
+            "핫이슈",
+            "트렌드",
+            "트렌딩",
+            "인기",
+            "화제",
+            "떠오르는",
+        ]
+    ):
         return 14
     if any(kw in q for kw in ["이번달", "이번 달", "금월"]):
         return 30
@@ -605,7 +757,8 @@ def _recency_score(published_at: str, now_ts: float) -> float:
     if not published_at:
         return 0.0
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         dt = datetime.fromisoformat(published_at)
         days_ago = max((now_ts - dt.timestamp()) / 86400, 0)
         return 1.0 / (1.0 + days_ago / 7.0)
@@ -632,32 +785,45 @@ def _build_context_and_sources(
         if doc_type == "news":
             source_label = meta.get("publisher") or "뉴스"
         elif doc_type == "social":
-            _parts = [p for p in [meta.get("platform"), meta.get("identifier") or meta.get("category")] if p]
+            _parts = [
+                p
+                for p in [
+                    meta.get("platform"),
+                    meta.get("identifier") or meta.get("category"),
+                ]
+                if p
+            ]
             source_label = "/".join(_parts) if _parts else "커뮤니티"
         else:
             source_label = doc_type or "기타"
 
-        type_tag = "[뉴스]" if doc_type == "news" else "[커뮤니티]" if doc_type == "social" else "[기타]"
+        type_tag = (
+            "[뉴스]"
+            if doc_type == "news"
+            else "[커뮤니티]" if doc_type == "social" else "[기타]"
+        )
 
         blocks.append(
             f"{type_tag} 출처: {source_label} | 날짜: {meta.get('published_at', '')} | 관련도: {r.distance:.3f}\n"
             f"{(r.document or '')[:max_doc_chars]}"
         )
 
-        sources.append({
-            "id": r.id,
-            "distance": r.distance,
-            "url": url,
-            "title": meta.get("title") or "",
-            "type": (doc_type or None),
-            "platform": meta.get("platform"),
-            "publisher": meta.get("publisher"),
-            "category": meta.get("category"),
-            "identifier": meta.get("identifier"),
-            "source_display": meta.get("source_display"),
-            "published_at": meta.get("published_at"),
-            "excerpt": (r.document or "")[:300],
-        })
+        sources.append(
+            {
+                "id": r.id,
+                "distance": r.distance,
+                "url": url,
+                "title": meta.get("title") or "",
+                "type": (doc_type or None),
+                "platform": meta.get("platform"),
+                "publisher": meta.get("publisher"),
+                "category": meta.get("category"),
+                "identifier": meta.get("identifier"),
+                "source_display": meta.get("source_display"),
+                "published_at": meta.get("published_at"),
+                "excerpt": (r.document or "")[:300],
+            }
+        )
 
     header_lines = [f"[EVIDENCE_QUALITY: {evidence_quality}]"]
     if source_intent != "any":
@@ -676,7 +842,9 @@ class OpenAIResponsesLLM:
     """
 
     def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY") or getattr(settings, "OPENAI_API_KEY", None)
+        api_key = os.getenv("OPENAI_API_KEY") or getattr(
+            settings, "OPENAI_API_KEY", None
+        )
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY가 설정되어 있지 않습니다. (.env 확인)")
 
@@ -686,7 +854,9 @@ class OpenAIResponsesLLM:
             from openai import OpenAI
 
             _llm_timeout = int(os.getenv("OPENAI_API_TIMEOUT", 45))
-            http_client = httpx.Client(timeout=httpx.Timeout(_llm_timeout, connect=10.0))
+            http_client = httpx.Client(
+                timeout=httpx.Timeout(_llm_timeout, connect=10.0)
+            )
             self.client = OpenAI(api_key=api_key, http_client=http_client)
         except Exception as e:
             raise RuntimeError(
@@ -711,19 +881,21 @@ class OpenAIResponsesLLM:
             pass
         return {}
 
-    def _extract_text_recursive(self, obj: Any, depth: int = 0, max_depth: int = 3) -> List[str]:
+    def _extract_text_recursive(
+        self, obj: Any, depth: int = 0, max_depth: int = 3
+    ) -> List[str]:
         """
         객체를 재귀적으로 탐색하여 텍스트를 찾음
         """
         if depth > max_depth:
             return []
-        
+
         texts = []
-        
+
         # 문자열인 경우
         if isinstance(obj, str) and obj.strip():
             texts.append(obj.strip())
-        
+
         # 딕셔너리인 경우
         elif isinstance(obj, dict):
             # 우선순위가 높은 키부터 확인
@@ -733,21 +905,21 @@ class OpenAIResponsesLLM:
                     found = self._extract_text_recursive(obj[key], depth + 1, max_depth)
                     if found:
                         texts.extend(found)
-            
+
             # 나머지 키들도 확인
             for key, value in obj.items():
                 if key not in priority_keys:
                     found = self._extract_text_recursive(value, depth + 1, max_depth)
                     if found:
                         texts.extend(found)
-        
+
         # 리스트인 경우
         elif isinstance(obj, list):
             for item in obj:
                 found = self._extract_text_recursive(item, depth + 1, max_depth)
                 if found:
                     texts.extend(found)
-        
+
         # 객체인 경우 (속성 확인)
         elif hasattr(obj, "__dict__"):
             # 우선순위 속성 확인
@@ -758,7 +930,7 @@ class OpenAIResponsesLLM:
                     found = self._extract_text_recursive(value, depth + 1, max_depth)
                     if found:
                         texts.extend(found)
-        
+
         return texts
 
     def _extract_text(self, res: Any) -> str:
@@ -774,14 +946,14 @@ class OpenAIResponsesLLM:
         out = getattr(res, "output", None)
         if out is not None:
             chunks = []
-            
+
             # output이 리스트인 경우
             if isinstance(out, list):
                 for item in out:
                     # item이 dict인 경우
                     if isinstance(item, dict):
                         item_type = item.get("type")
-                        
+
                         # reasoning 타입인 경우 summary 확인
                         if item_type == "reasoning":
                             summary = item.get("summary")
@@ -790,14 +962,17 @@ class OpenAIResponsesLLM:
                                 for s in summary:
                                     if isinstance(s, dict):
                                         text_val = s.get("text") or s.get("content")
-                                        if isinstance(text_val, str) and text_val.strip():
+                                        if (
+                                            isinstance(text_val, str)
+                                            and text_val.strip()
+                                        ):
                                             chunks.append(text_val.strip())
                                     elif isinstance(s, str) and s.strip():
                                         chunks.append(s.strip())
                             # summary가 문자열인 경우
                             elif isinstance(summary, str) and summary.strip():
                                 chunks.append(summary.strip())
-                        
+
                         # content 필드 확인
                         content = item.get("content")
                         if isinstance(content, str) and content.strip():
@@ -807,20 +982,35 @@ class OpenAIResponsesLLM:
                             for c in content:
                                 if isinstance(c, dict):
                                     # type이 text 또는 output_text인 경우
-                                    if c.get("type") in ("text", "output_text", "text_delta"):
+                                    if c.get("type") in (
+                                        "text",
+                                        "output_text",
+                                        "text_delta",
+                                    ):
                                         text_val = c.get("text") or c.get("content")
-                                        if isinstance(text_val, str) and text_val.strip():
+                                        if (
+                                            isinstance(text_val, str)
+                                            and text_val.strip()
+                                        ):
                                             chunks.append(text_val.strip())
                                     # text 필드가 직접 있는 경우
-                                    elif "text" in c and isinstance(c["text"], str) and c["text"].strip():
+                                    elif (
+                                        "text" in c
+                                        and isinstance(c["text"], str)
+                                        and c["text"].strip()
+                                    ):
                                         chunks.append(c["text"].strip())
                         # text 필드가 직접 있는 경우
-                        if "text" in item and isinstance(item["text"], str) and item["text"].strip():
+                        if (
+                            "text" in item
+                            and isinstance(item["text"], str)
+                            and item["text"].strip()
+                        ):
                             chunks.append(item["text"].strip())
                     # item이 객체인 경우
                     else:
                         item_type = getattr(item, "type", None)
-                        
+
                         # reasoning 타입인 경우 summary 확인
                         if item_type == "reasoning":
                             summary = getattr(item, "summary", None)
@@ -828,24 +1018,33 @@ class OpenAIResponsesLLM:
                                 for s in summary:
                                     if hasattr(s, "text"):
                                         text_val = getattr(s, "text")
-                                        if isinstance(text_val, str) and text_val.strip():
+                                        if (
+                                            isinstance(text_val, str)
+                                            and text_val.strip()
+                                        ):
                                             chunks.append(text_val.strip())
                                     elif isinstance(s, str) and s.strip():
                                         chunks.append(s.strip())
                             elif isinstance(summary, str) and summary.strip():
                                 chunks.append(summary.strip())
-                        
+
                         content = getattr(item, "content", None)
                         if isinstance(content, str) and content.strip():
                             chunks.append(content.strip())
-                        elif hasattr(item, "text") and isinstance(getattr(item, "text"), str):
+                        elif hasattr(item, "text") and isinstance(
+                            getattr(item, "text"), str
+                        ):
                             text_val = getattr(item, "text")
                             if text_val.strip():
                                 chunks.append(text_val.strip())
-            
+
             # output이 dict인 경우
             elif isinstance(out, dict):
-                if "text" in out and isinstance(out["text"], str) and out["text"].strip():
+                if (
+                    "text" in out
+                    and isinstance(out["text"], str)
+                    and out["text"].strip()
+                ):
                     chunks.append(out["text"].strip())
                 if "content" in out:
                     content = out["content"]
@@ -857,7 +1056,7 @@ class OpenAIResponsesLLM:
                                 text_val = c.get("text")
                                 if isinstance(text_val, str) and text_val.strip():
                                     chunks.append(text_val.strip())
-            
+
             if chunks:
                 joined = "\n".join(chunks).strip()
                 if joined:
@@ -889,23 +1088,29 @@ class OpenAIResponsesLLM:
             res_dict = self._response_to_dict(res)
             if res_dict:
                 # output_text 확인
-                if "output_text" in res_dict and isinstance(res_dict["output_text"], str):
+                if "output_text" in res_dict and isinstance(
+                    res_dict["output_text"], str
+                ):
                     if res_dict["output_text"].strip():
                         return res_dict["output_text"].strip()
-                
+
                 # output 확인
                 if "output" in res_dict:
                     out = res_dict["output"]
                     if isinstance(out, list) and len(out) > 0:
                         for item in out:
                             if isinstance(item, dict):
-                                if "text" in item and isinstance(item["text"], str) and item["text"].strip():
+                                if (
+                                    "text" in item
+                                    and isinstance(item["text"], str)
+                                    and item["text"].strip()
+                                ):
                                     return item["text"].strip()
                                 if "content" in item:
                                     content = item["content"]
                                     if isinstance(content, str) and content.strip():
                                         return content.strip()
-                
+
                 # text 직접 확인
                 if "text" in res_dict and isinstance(res_dict["text"], str):
                     if res_dict["text"].strip():
@@ -920,7 +1125,9 @@ class OpenAIResponsesLLM:
                 # 가장 긴 텍스트를 반환 (일반적으로 가장 완전한 답변)
                 longest = max(recursive_texts, key=len)
                 if longest.strip():
-                    logger.debug(f"[LLM 텍스트 추출] 재귀적 탐색으로 텍스트 발견 (길이={len(longest)})")
+                    logger.debug(
+                        f"[LLM 텍스트 추출] 재귀적 탐색으로 텍스트 발견 (길이={len(longest)})"
+                    )
                     return longest.strip()
         except Exception as e:
             logger.debug(f"[LLM 텍스트 추출] 재귀적 탐색 실패: {str(e)}")
@@ -937,12 +1144,21 @@ class OpenAIResponsesLLM:
         reasoning_effort: Optional[str] = None,
         instructions: Optional[str] = None,
     ) -> LLMResult:
-        final_model = model or getattr(settings, "OPENAI_MODEL", None) or os.getenv("OPENAI_MODEL", "gpt-5")
+        final_model = (
+            model
+            or getattr(settings, "OPENAI_MODEL", None)
+            or os.getenv("OPENAI_MODEL", "gpt-5")
+        )
 
         # ✅ 기본값(없으면 settings/.env 사용) - 답변이 중간에 끊기지 않도록 충분한 토큰 확보
         # gpt-5는 reasoning 토큰이 output_tokens에서 차감되므로 충분히 높게 설정
         # 예: reasoning 500 + 실제 출력 500 = 최소 1000 필요
-        default_max = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", getattr(settings, "OPENAI_MAX_OUTPUT_TOKENS", 1500)))
+        default_max = int(
+            os.getenv(
+                "OPENAI_MAX_OUTPUT_TOKENS",
+                getattr(settings, "OPENAI_MAX_OUTPUT_TOKENS", 1500),
+            )
+        )
         if max_output_tokens is None or int(max_output_tokens) <= 0:
             max_output_tokens = default_max
 
@@ -951,7 +1167,6 @@ class OpenAIResponsesLLM:
         MAX_HARD_CAP = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS_CAP", 2000))
         if max_output_tokens > MAX_HARD_CAP:
             max_output_tokens = MAX_HARD_CAP
-
 
         # ✅ 최소 방어
         if max_output_tokens < 16:
@@ -973,7 +1188,9 @@ class OpenAIResponsesLLM:
             "[커뮤니티] 자료는 온라인 커뮤니티 게시글이므로 '온라인에서는 ~라는 반응이 있다', "
             "'커뮤니티에서는 ~라는 의견이 나온다' 등 여론/반응으로만 인용하세요."
         )
-        system_lines.append("절대로 커뮤니티 게시글의 내용을 뉴스 보도처럼 사실로 단정하지 마세요.")
+        system_lines.append(
+            "절대로 커뮤니티 게시글의 내용을 뉴스 보도처럼 사실로 단정하지 마세요."
+        )
         system_lines.append(
             "뉴스와 커뮤니티 정보가 상충할 경우, 뉴스를 사실로 우선 제시하고 "
             "커뮤니티는 '일부에서는 다른 반응도 있다'는 정도로만 언급하세요."
@@ -983,11 +1200,18 @@ class OpenAIResponsesLLM:
             "'수집된 자료가 제한적이어서' 또는 '관련 자료가 부족하지만'이라는 전제를 반드시 붙이세요."
         )
         system_lines.append("CONTEXT에 없는 사실을 만들어내지 마세요.")
-        system_lines.append("각 정보의 출처 유형([뉴스] 또는 [커뮤니티])을 답변 내에서 자연스럽게 구분해 주세요.")
-        system_lines.append("답변은 1~3문단으로 핵심만 간결하게 작성하세요. 불필요하게 늘리지 마세요.")
-        system_lines.append("기사 제목을 나열하지 말고, 이슈를 자연스럽게 풀어 설명하세요.")
-        system_lines.append("답변은 완전한 문장으로 끝내고, 추가 질문이나 제안은 붙이지 마세요.")
-
+        system_lines.append(
+            "각 정보의 출처 유형([뉴스] 또는 [커뮤니티])을 답변 내에서 자연스럽게 구분해 주세요."
+        )
+        system_lines.append(
+            "답변은 1~3문단으로 핵심만 간결하게 작성하세요. 불필요하게 늘리지 마세요."
+        )
+        system_lines.append(
+            "기사 제목을 나열하지 말고, 이슈를 자연스럽게 풀어 설명하세요."
+        )
+        system_lines.append(
+            "답변은 완전한 문장으로 끝내고, 추가 질문이나 제안은 붙이지 마세요."
+        )
 
         if instructions:
             system_lines.append(f"[추가 지시사항]\n{instructions}")
@@ -996,12 +1220,14 @@ class OpenAIResponsesLLM:
 
         # CONTEXT 길이 확인 및 로깅
         context_length = len(context) if context else 0
-        logger.debug(f"[LLM 프롬프트] 질문 길이={len(query_text)}, CONTEXT 길이={context_length}")
-        
+        logger.debug(
+            f"[LLM 프롬프트] 질문 길이={len(query_text)}, CONTEXT 길이={context_length}"
+        )
+
         # CONTEXT가 너무 짧으면 경고
         if context_length < 50:
             logger.warning(f"[LLM 프롬프트] CONTEXT가 너무 짧음 ({context_length}자)")
-        
+
         user_prompt = (
             f"[질문]\n{query_text}\n\n"
             f"[CONTEXT]\n{context}\n\n"
@@ -1015,7 +1241,7 @@ class OpenAIResponsesLLM:
             f"'현재 수집된 데이터에서 관련 근거가 적어요.'라고 전제하고 가능한 범위에서만 답변\n\n"
             f"형식: 완전한 문장으로 마무리하세요. 추가 질문이나 제안은 붙이지 마세요.\n"
         )
-        
+
         # 프롬프트 길이 확인
         prompt_length = len(user_prompt)
         logger.debug(f"[LLM 프롬프트] 전체 프롬프트 길이={prompt_length}")
@@ -1037,11 +1263,15 @@ class OpenAIResponsesLLM:
             # 사용자가 명시적으로 요청한 경우에만 그대로 사용
             if reasoning_effort and reasoning_effort.strip():
                 payload["reasoning"] = {"effort": reasoning_effort.strip()}
-                logger.info(f"[LLM] gpt-5 모델, 사용자 요청에 따라 reasoning effort를 '{reasoning_effort}'로 설정")
+                logger.info(
+                    f"[LLM] gpt-5 모델, 사용자 요청에 따라 reasoning effort를 '{reasoning_effort}'로 설정"
+                )
             else:
                 # reasoning을 'low'로 설정하여 reasoning 토큰 사용량 최소화
                 payload["reasoning"] = {"effort": "low"}
-                logger.info(f"[LLM] gpt-5 모델이므로 reasoning effort를 'low'로 설정 (output 토큰 확보)")
+                logger.info(
+                    "[LLM] gpt-5 모델이므로 reasoning effort를 'low'로 설정 (output 토큰 확보)"
+                )
         elif reasoning_effort and reasoning_effort.strip():
             # 다른 모델은 요청한 대로 설정
             payload["reasoning"] = {"effort": reasoning_effort.strip()}
@@ -1049,8 +1279,12 @@ class OpenAIResponsesLLM:
         if supports_temperature and temperature is not None:
             payload["temperature"] = temperature
 
-        logger.debug(f"[LLM 호출 시작] model={final_model} max_output_tokens={max_output_tokens}")
-        logger.debug(f"[LLM payload] reasoning 설정: {payload.get('reasoning', 'None')}")
+        logger.debug(
+            f"[LLM 호출 시작] model={final_model} max_output_tokens={max_output_tokens}"
+        )
+        logger.debug(
+            f"[LLM payload] reasoning 설정: {payload.get('reasoning', 'None')}"
+        )
         logger.info(
             f"[LLM 호출 시작] model={final_model} max_output_tokens={max_output_tokens} "
             f"temperature={'(미전송)' if (not supports_temperature) else temperature} "
@@ -1065,8 +1299,10 @@ class OpenAIResponsesLLM:
                 break
             except (ConnectionError, TimeoutError, OSError) as _net_err:
                 if _attempt < _max_retries:
-                    _wait = 2 ** _attempt
-                    logger.warning(f"[LLM] 일시적 오류, {_wait}s 후 재시도 ({_attempt+1}/{_max_retries}): {_net_err}")
+                    _wait = 2**_attempt
+                    logger.warning(
+                        f"[LLM] 일시적 오류, {_wait}s 후 재시도 ({_attempt+1}/{_max_retries}): {_net_err}"
+                    )
                     time.sleep(_wait)
                 else:
                     raise
@@ -1076,7 +1312,7 @@ class OpenAIResponsesLLM:
         if not text.strip():
             # ✅ 빈 응답이면 raw 구조를 로그로 남겨 원인 추적 가능하게
             response_id = getattr(res, "id", None)
-            
+
             # 디버깅을 위한 응답 구조 로깅
             debug_info = {
                 "response_id": response_id,
@@ -1084,11 +1320,15 @@ class OpenAIResponsesLLM:
                 "has_output_text": hasattr(res, "output_text"),
                 "output_text_value": getattr(res, "output_text", None),
                 "has_output": hasattr(res, "output"),
-                "output_type": type(getattr(res, "output", None)).__name__ if hasattr(res, "output") else None,
+                "output_type": (
+                    type(getattr(res, "output", None)).__name__
+                    if hasattr(res, "output")
+                    else None
+                ),
                 "has_choices": hasattr(res, "choices"),
                 "has_text": hasattr(res, "text"),
             }
-            
+
             # output이 있으면 일부 구조 확인
             if hasattr(res, "output"):
                 out = getattr(res, "output")
@@ -1111,16 +1351,18 @@ class OpenAIResponsesLLM:
                     for key in ["text", "content", "message"]:
                         if key in out:
                             debug_info[f"output_{key}"] = str(out[key])[:200]
-            
+
             # 응답 객체의 모든 속성 확인
             if hasattr(res, "__dict__"):
                 debug_info["response_attrs"] = list(res.__dict__.keys())[:10]
             elif hasattr(res, "__slots__"):
                 debug_info["response_slots"] = list(res.__slots__)[:10]
-            
-            logger.error(f"[LLM 빈 응답] model={final_model} 소요={dt:.2f}s response_id={response_id}")
+
+            logger.error(
+                f"[LLM 빈 응답] model={final_model} 소요={dt:.2f}s response_id={response_id}"
+            )
             logger.error(f"[LLM 디버그 정보] {debug_info}")
-            
+
             # raw 응답을 dict로 변환 시도 (디버깅용)
             try:
                 raw_dict = self._response_to_dict(res)
@@ -1130,6 +1372,7 @@ class OpenAIResponsesLLM:
                     for key, value in raw_dict.items():
                         try:
                             import json
+
                             json.dumps(value)  # 직렬화 가능한지 테스트
                             json_safe_dict[key] = value
                         except (TypeError, ValueError):
@@ -1137,20 +1380,24 @@ class OpenAIResponsesLLM:
                     logger.error(f"[LLM raw 응답 구조] {str(json_safe_dict)[:2000]}")
             except Exception as e:
                 logger.error(f"[LLM raw 응답 변환 실패] {str(e)}")
-            
+
             # 응답 객체를 문자열로 직접 변환 시도
             try:
                 logger.error(f"[LLM 응답 객체 str] {str(res)[:1000]}")
                 logger.error(f"[LLM 응답 객체 repr] {repr(res)[:1000]}")
             except Exception as e:
                 logger.error(f"[LLM 응답 객체 변환 실패] {str(e)}")
-            
+
             return LLMResult(text="답변 생성에 실패했습니다. (빈 응답)", raw=res)
 
-        logger.info(f"[LLM 호출 완료] model={final_model} 소요={dt:.2f}s 글자수={len(text)}")
+        logger.info(
+            f"[LLM 호출 완료] model={final_model} 소요={dt:.2f}s 글자수={len(text)}"
+        )
         return LLMResult(text=text, raw=res)
 
-    def classify_intent(self, query_text: str, *, model: Optional[str] = None) -> Dict[str, Any]:
+    def classify_intent(
+        self, query_text: str, *, model: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         ✅ 질문 분석 + 검색 힌트 생성용 LLM 호출 (한 번에 처리)
         - 외부 지식/사실 판단 없이 "질문 자체"만 구조적으로 분석
@@ -1166,7 +1413,11 @@ class OpenAIResponsesLLM:
           }
         - 토큰 사용량은 환경변수 RAG_INTENT_MAX_OUTPUT_TOKENS로 제어(기본 200)
         """
-        final_model = model or getattr(settings, "OPENAI_MODEL", None) or os.getenv("OPENAI_MODEL", "gpt-5")
+        final_model = (
+            model
+            or getattr(settings, "OPENAI_MODEL", None)
+            or os.getenv("OPENAI_MODEL", "gpt-5")
+        )
 
         system_prompt = (
             "너는 사용자의 질문을 이해하고 분석하는 전문가야.\n"
@@ -1218,6 +1469,7 @@ class OpenAIResponsesLLM:
             res = self.client.responses.create(**payload)
             text = (self._extract_text(res) or "").strip()
             import json
+
             data = json.loads(text) if text else {}
             if not isinstance(data, dict):
                 return {
@@ -1241,7 +1493,12 @@ class OpenAIResponsesLLM:
                 time_focus = "unspecified"
 
             sentiment_focus = data.get("sentiment_focus")
-            if sentiment_focus not in ("neutral", "positive", "negative", "controversial"):
+            if sentiment_focus not in (
+                "neutral",
+                "positive",
+                "negative",
+                "controversial",
+            ):
                 sentiment_focus = "neutral"
 
             information_scope = data.get("information_scope")
@@ -1263,7 +1520,9 @@ class OpenAIResponsesLLM:
                 "search_hint": search_hint,
             }
         except Exception as e:
-            logger.warning(f"[IntentRouter] classify_intent 실패: {type(e).__name__}: {str(e)}")
+            logger.warning(
+                f"[IntentRouter] classify_intent 실패: {type(e).__name__}: {str(e)}"
+            )
             return {
                 "main_intent": "unknown",
                 "topic_entity": "",
@@ -1290,7 +1549,11 @@ class OpenAIResponsesLLM:
         Returns:
             검색에 적합하게 재구성된 쿼리 문자열
         """
-        final_model = model or getattr(settings, "OPENAI_MODEL", None) or os.getenv("OPENAI_MODEL", "gpt-5")
+        final_model = (
+            model
+            or getattr(settings, "OPENAI_MODEL", None)
+            or os.getenv("OPENAI_MODEL", "gpt-5")
+        )
 
         system_prompt = (
             "너는 사용자의 대화형 질문을 뉴스/게시글 검색에 적합한 형태로 변환하는 전문가야.\n\n"
@@ -1339,7 +1602,9 @@ class OpenAIResponsesLLM:
             return reformulated
 
         except Exception as e:
-            logger.warning(f"[reformulate_query] 실패, 원본 사용: {type(e).__name__}: {str(e)}")
+            logger.warning(
+                f"[reformulate_query] 실패, 원본 사용: {type(e).__name__}: {str(e)}"
+            )
             return query_text
 
 
@@ -1369,7 +1634,9 @@ class RAGService:
         # 1) 너무 짧으면 LLM이 억지로 엔티티를 만들 가능성이 큼 (한국어 기준 7자 이하 위험)
         if len(q) <= 7:
             # 단, 강한 신호가 있으면 예외로 통과
-            has_strong_signal = bool(re.search(r"[A-Z]{2,}|[0-9]|[#@]|\".+?\"|'.+?'", q))
+            has_strong_signal = bool(
+                re.search(r"[A-Z]{2,}|[0-9]|[#@]|\".+?\"|'.+?'", q)
+            )
             # 한글 2~6자 덩어리(인명/기관) 가능성
             has_korean_chunk = bool(re.search(r"[가-힣]{2,6}", q))
             if not (has_strong_signal or has_korean_chunk):
@@ -1385,8 +1652,23 @@ class RAGService:
         if any(re.search(p, q) for p in generic_patterns):
             # 문장 안에 의미 있는 토큰이 없으면 스킵
             stop_words = {
-                "요즘", "최근", "이슈", "뉴스", "기사", "사건", "소식", "정리", "알려줘",
-                "뭐", "무슨", "있어", "있냐", "있나요", "관련", "좀", "좀요",
+                "요즘",
+                "최근",
+                "이슈",
+                "뉴스",
+                "기사",
+                "사건",
+                "소식",
+                "정리",
+                "알려줘",
+                "뭐",
+                "무슨",
+                "있어",
+                "있냐",
+                "있나요",
+                "관련",
+                "좀",
+                "좀요",
             }
             tokens = re.findall(r"[가-힣]+|[A-Za-z]+|[0-9]+", q)
             meaningful = [t for t in tokens if t not in stop_words]
@@ -1421,7 +1703,11 @@ class RAGService:
 
         # ✅ 1) 최종 옵션 먼저 확정 (캐시 키 + LLM 호출 양쪽에서 공유)
         final_model = model or _get_setting("OPENAI_MODEL", "gpt-5")
-        final_temperature = temperature if temperature is not None else float(_get_setting("OPENAI_TEMPERATURE", 0.25))
+        final_temperature = (
+            temperature
+            if temperature is not None
+            else float(_get_setting("OPENAI_TEMPERATURE", 0.25))
+        )
         final_max_tokens = (
             int(_get_setting("OPENAI_MAX_OUTPUT_TOKENS", 700))
             if (max_output_tokens is None or int(max_output_tokens) <= 0)
@@ -1431,8 +1717,12 @@ class RAGService:
             final_max_tokens = 16
 
         # ✅ 2) 최신 데이터 버전(수집 시각) 계산: 새 뉴스/소셜 들어오면 버전이 바뀜
-        latest_news = NewsArticle.objects.aggregate(Max("collected_at"))["collected_at__max"]
-        latest_social = SocialMediaPost.objects.aggregate(Max("collected_at"))["collected_at__max"]
+        latest_news = NewsArticle.objects.aggregate(Max("collected_at"))[
+            "collected_at__max"
+        ]
+        latest_social = SocialMediaPost.objects.aggregate(Max("collected_at"))[
+            "collected_at__max"
+        ]
 
         # ✅ 벡터DB 문서 수를 포함하여 backfill/임베딩 변경 시 캐시 자동 무효화
         try:
@@ -1462,7 +1752,9 @@ class RAGService:
         # ✅ 3) 캐시 조회 (정규화된 키 사용)
         _cache_query = re.sub(r"\s+", " ", query_text).strip().rstrip("?？！!.")
         if not force_refresh:
-            cached_response = self.cache_service.get_cached_response(_cache_query, cache_context=cache_context)
+            cached_response = self.cache_service.get_cached_response(
+                _cache_query, cache_context=cache_context
+            )
             if cached_response:
                 logger.debug("[RAGService.query] 캐시된 응답 반환 (캐시 히트)")
                 return cached_response
@@ -1479,11 +1771,15 @@ class RAGService:
             "core_question": "",
             "search_hint": "",
         }
-        if bool(_get_setting("RAG_INTENT_ROUTER_ENABLED", True)) or bool(use_intent_router):
+        if bool(_get_setting("RAG_INTENT_ROUTER_ENABLED", True)) or bool(
+            use_intent_router
+        ):
             if self._should_skip_intent_llm(query_text):
                 logger.info(f"[IntentRouter] 스킵(룰 매칭): query='{query_text}'")
             else:
-                intent_info = self.llm.classify_intent(query_text=query_text, model=final_model)
+                intent_info = self.llm.classify_intent(
+                    query_text=query_text, model=final_model
+                )
                 logger.info(f"[IntentRouter] {intent_info}")
 
         # ========================================
@@ -1492,18 +1788,23 @@ class RAGService:
         # 명확한 쿼리(엔티티 2개+ 또는 짧고 구체적)는 재구성 스킵하여 지연/비용 절감
         pre_entities = _extract_key_entities(query_text)
         query_tokens = query_text.split()
-        skip_reformulate = (
-            (len(pre_entities) >= 2)
-            or (len(pre_entities) >= 1 and len(query_tokens) <= 4)
+        skip_reformulate = (len(pre_entities) >= 2) or (
+            len(pre_entities) >= 1 and len(query_tokens) <= 4
         )
 
         _t_stage = time.time()
         if skip_reformulate:
             reformulated_query = query_text
-            logger.info(f"[RAG 검색] 명확한 쿼리이므로 재구성 스킵: '{query_text}' (엔티티: {pre_entities})")
+            logger.info(
+                f"[RAG 검색] 명확한 쿼리이므로 재구성 스킵: '{query_text}' (엔티티: {pre_entities})"
+            )
         else:
-            reformulated_query = self.llm.reformulate_query(query_text, model=final_model)
-            logger.info(f"[RAG 검색] 원본: '{query_text}' → 재구성: '{reformulated_query}'")
+            reformulated_query = self.llm.reformulate_query(
+                query_text, model=final_model
+            )
+            logger.info(
+                f"[RAG 검색] 원본: '{query_text}' → 재구성: '{reformulated_query}'"
+            )
         logger.info(f"[RAG 타이밍] 쿼리 재구성: {time.time() - _t_stage:.2f}s")
 
         # ========================================
@@ -1528,7 +1829,9 @@ class RAGService:
                 search_query = f"{reformulated_query} {hint}"
 
         retrieval_k = max(int(top_k) * 8, int(top_k) + 30)
-        candidate_distance_threshold = float(_get_setting("RAG_CANDIDATE_DISTANCE_THRESHOLD", 1.5))
+        candidate_distance_threshold = float(
+            _get_setting("RAG_CANDIDATE_DISTANCE_THRESHOLD", 1.5)
+        )
 
         semantic_candidates = self.vector_db.similarity_search(
             search_query,
@@ -1547,7 +1850,9 @@ class RAGService:
                 keywords=key_entities,
                 top_k=retrieval_k,
             )
-            logger.info(f"[RAG 검색] 키워드 검색 결과: {len(keyword_candidates)}개 (엔티티: {key_entities})")
+            logger.info(
+                f"[RAG 검색] 키워드 검색 결과: {len(keyword_candidates)}개 (엔티티: {key_entities})"
+            )
 
         # 4) 후보군 병합 (A + B, 중복 제거)
         seen_ids: set = set()
@@ -1565,7 +1870,9 @@ class RAGService:
                 seen_ids.add(r.id)
                 candidates.append(r)
 
-        logger.info(f"[RAG 검색] 병합된 후보군: {len(candidates)}개 (키워드: {len(keyword_candidates)}, 시맨틱: {len(semantic_candidates)})")
+        logger.info(
+            f"[RAG 검색] 병합된 후보군: {len(candidates)}개 (키워드: {len(keyword_candidates)}, 시맨틱: {len(semantic_candidates)})"
+        )
 
         # ========================================
         # 5) Reddit 제목 DB 검색 (벡터 검색 보완)
@@ -1586,7 +1893,9 @@ class RAGService:
         if reddit_added:
             logger.info(f"[RAG 검색] Reddit 제목 DB 검색으로 {reddit_added}개 추가")
 
-        logger.info(f"[RAG 타이밍] 검색(시맨틱+키워드+Reddit): {time.time() - _t_stage:.2f}s")
+        logger.info(
+            f"[RAG 타이밍] 검색(시맨틱+키워드+Reddit): {time.time() - _t_stage:.2f}s"
+        )
 
         if not candidates:
             logger.warning(f"[RAG 검색] 검색 결과 없음: query={query_text}")
@@ -1606,7 +1915,8 @@ class RAGService:
         _now_ts = time.time()
 
         if time_scope_days > 0:
-            from datetime import datetime, timezone, timedelta
+            from datetime import datetime, timedelta, timezone
+
             cutoff_dt = datetime.now(timezone.utc) - timedelta(days=time_scope_days)
 
             recent_candidates = []
@@ -1665,14 +1975,18 @@ class RAGService:
                 results = typed
                 logger.info(f"[RAG 필터] news intent → {len(typed)}개 뉴스 선택")
             else:
-                logger.warning(f"[RAG 필터] news intent이지만 뉴스 결과 없음, {len(results)}개 전체 결과로 대체")
+                logger.warning(
+                    f"[RAG 필터] news intent이지만 뉴스 결과 없음, {len(results)}개 전체 결과로 대체"
+                )
         elif source_intent == "community":
             typed = [r for r in results if _infer_type(r.id, r.metadata) == "social"]
             if typed:
                 results = typed
                 logger.info(f"[RAG 필터] community intent → {len(typed)}개 소셜 선택")
             else:
-                logger.warning(f"[RAG 필터] community intent이지만 소셜 결과 없음, {len(results)}개 전체 결과로 대체")
+                logger.warning(
+                    f"[RAG 필터] community intent이지만 소셜 결과 없음, {len(results)}개 전체 결과로 대체"
+                )
 
         # ========================================
         # STEP D: 거리 게이트 (하드 → 소프트 → fallback 단계적 적용)
@@ -1684,12 +1998,16 @@ class RAGService:
             results = gated
         elif gated:
             # 하드 게이트 통과는 적지만 있음 → 소프트 범위로 보충
-            soft_gated = [r for r in results if r.distance <= hard_distance * 1.3 and r not in gated]
+            soft_gated = [
+                r
+                for r in results
+                if r.distance <= hard_distance * 1.3 and r not in gated
+            ]
             results = gated + soft_gated
         else:
             # 모든 문서가 하드 게이트 초과 → 거리순 정렬 후 top_k 유지
             results.sort(key=lambda r: r.distance)
-            results = results[:int(top_k)]
+            results = results[: int(top_k)]
             force_low_quality = True
 
         # ========================================
@@ -1714,11 +2032,15 @@ class RAGService:
             entity_bonus = 0
             if has_entities:
                 combined_lower = combined.lower()
-                entity_bonus = sum(1 for ent in key_entities if ent.lower() in combined_lower) * 10
+                entity_bonus = (
+                    sum(1 for ent in key_entities if ent.lower() in combined_lower) * 10
+                )
 
             within_soft = 1 if r.distance <= final_distance_cutoff else 0
             # 최신성 점수 (0.0~1.0, 가중치 적용)
-            recency = _recency_score(meta.get("published_at", ""), _now_ts) * recency_weight
+            recency = (
+                _recency_score(meta.get("published_at", ""), _now_ts) * recency_weight
+            )
             # 뉴스 미세 우선
             news_boost = 0.01 if _infer_type(r.id, r.metadata) == "news" else 0
 
@@ -1726,19 +2048,24 @@ class RAGService:
             return (-score, r.distance)
 
         results.sort(key=_sort_key)
-        results = results[:int(top_k)]
+        results = results[: int(top_k)]
 
         # ========================================
         # STEP E-2: 결과 다양성 보장 (같은 출처 편중 방지)
         # ========================================
         if len(results) > 2:
             from collections import defaultdict as _ddict
+
             _src_counts = _ddict(int)
             _max_per_source = max(len(results) // 2, 2)
             _diversified = []
             _overflow = []
             for r in results:
-                src = (r.metadata or {}).get("publisher") or (r.metadata or {}).get("source_name") or "unknown"
+                src = (
+                    (r.metadata or {}).get("publisher")
+                    or (r.metadata or {}).get("source_name")
+                    or "unknown"
+                )
                 if _src_counts[src] < _max_per_source:
                     _diversified.append(r)
                     _src_counts[src] += 1
@@ -1796,7 +2123,9 @@ class RAGService:
                 evidence_quality = "low"
 
         news_count = sum(1 for r in results if _infer_type(r.id, r.metadata) == "news")
-        social_count = sum(1 for r in results if _infer_type(r.id, r.metadata) == "social")
+        social_count = sum(
+            1 for r in results if _infer_type(r.id, r.metadata) == "social"
+        )
 
         logger.info(
             f"[RAG 검색] 최종 {len(results)}개 (뉴스:{news_count}, 소셜:{social_count}), "
@@ -1828,10 +2157,10 @@ class RAGService:
             intent_instruction = "원인, 배경, 의미를 구조적으로 분석하여 설명하세요."
         elif main_intent == "comparison":
             intent_instruction = "비교 대상의 차이점과 공통점을 중심으로 설명하세요."
-        
+
         # CONTEXT가 비어있는지 확인
         if not context or not context.strip():
-            logger.error(f"[RAG 검색] CONTEXT가 비어있음. 검색 결과를 확인하세요.")
+            logger.error("[RAG 검색] CONTEXT가 비어있음. 검색 결과를 확인하세요.")
             return {
                 "answer": f"'{query_text}'에 대한 관련 정보를 찾을 수 없습니다. 다른 키워드로 검색해보세요.",
                 "sources": [],
@@ -1841,7 +2170,11 @@ class RAGService:
         # intent_instruction이 있으면 instructions에 합류
         final_instructions = instructions or ""
         if intent_instruction:
-            final_instructions = f"{final_instructions}\n{intent_instruction}".strip() if final_instructions else intent_instruction
+            final_instructions = (
+                f"{final_instructions}\n{intent_instruction}".strip()
+                if final_instructions
+                else intent_instruction
+            )
 
         _t_stage = time.time()
         logger.debug(f"[RAGService.query] LLM 호출 시작 - context 길이: {len(context)}")
@@ -1857,47 +2190,96 @@ class RAGService:
             )
             logger.debug(f"[RAGService.query] LLM 응답 받음 - type: {type(llm_result)}")
             # LLMResult 객체에서 텍스트 추출
-            answer = llm_result.text if isinstance(llm_result, LLMResult) else str(llm_result)
-            logger.debug(f"[RAGService.query] 추출된 answer 길이: {len(answer) if answer else 0}")
-            logger.debug(f"[RAGService.query] 추출된 answer 내용 (처음 200자): {answer[:200] if answer else 'None'}")
-            
+            answer = (
+                llm_result.text
+                if isinstance(llm_result, LLMResult)
+                else str(llm_result)
+            )
+            logger.debug(
+                f"[RAGService.query] 추출된 answer 길이: {len(answer) if answer else 0}"
+            )
+            logger.debug(
+                f"[RAGService.query] 추출된 answer 내용 (처음 200자): {answer[:200] if answer else 'None'}"
+            )
+
             # ✅ 답변이 중간에 잘린 경우 감지 및 처리
             if answer:
                 # 마지막 문장이 완전하지 않은 경우 감지
-                incomplete_endings = ['하지만', '그리고', '또한', '또', '그런데', '그러나', '따라서', '그래서', '그러므로', '뿐만', '뿐만 아니라']
+                incomplete_endings = [
+                    "하지만",
+                    "그리고",
+                    "또한",
+                    "또",
+                    "그런데",
+                    "그러나",
+                    "따라서",
+                    "그래서",
+                    "그러므로",
+                    "뿐만",
+                    "뿐만 아니라",
+                ]
                 answer_stripped = answer.strip()
-                
+
                 # 마지막 문장이 마침표/느낌표/물음표로 끝나지 않고, 접속사로 끝나는 경우
-                if answer_stripped and not answer_stripped[-1] in ['.', '!', '?', '。', '！', '？']:
+                if answer_stripped and not answer_stripped[-1] in [
+                    ".",
+                    "!",
+                    "?",
+                    "。",
+                    "！",
+                    "？",
+                ]:
                     # 마지막 문장이 접속사로 끝나는지 확인
-                    last_sentence = answer_stripped.split('\n')[-1].strip()
-                    if any(last_sentence.endswith(ending) for ending in incomplete_endings):
+                    last_sentence = answer_stripped.split("\n")[-1].strip()
+                    if any(
+                        last_sentence.endswith(ending) for ending in incomplete_endings
+                    ):
                         # 중간에 잘린 것으로 판단하여 마지막 불완전한 문장 제거
-                        sentences = answer_stripped.split('\n')
+                        sentences = answer_stripped.split("\n")
                         # 완전한 문장만 남기기 (마침표로 끝나는 문장)
                         complete_sentences = []
                         for sent in sentences:
                             sent = sent.strip()
-                            if sent and (sent[-1] in ['.', '!', '?', '。', '！', '？'] or sent.startswith('•') or sent.startswith('-') or sent.startswith('*')):
+                            if sent and (
+                                sent[-1] in [".", "!", "?", "。", "！", "？"]
+                                or sent.startswith("•")
+                                or sent.startswith("-")
+                                or sent.startswith("*")
+                            ):
                                 complete_sentences.append(sent)
-                            elif sent and not any(sent.endswith(ending) for ending in incomplete_endings):
+                            elif sent and not any(
+                                sent.endswith(ending) for ending in incomplete_endings
+                            ):
                                 complete_sentences.append(sent)
-                        
+
                         if complete_sentences:
-                            answer = '\n'.join(complete_sentences)
-                            logger.warning(f"[RAGService.query] 답변이 중간에 잘린 것으로 감지되어 수정함 (원본 길이: {len(answer_stripped)}, 수정 후: {len(answer)})")
+                            answer = "\n".join(complete_sentences)
+                            logger.warning(
+                                f"[RAGService.query] 답변이 중간에 잘린 것으로 감지되어 수정함 (원본 길이: {len(answer_stripped)}, 수정 후: {len(answer)})"
+                            )
                         else:
                             # 완전한 문장이 없으면 마지막 문장을 제거하고 요약 bullet만 남기기
-                            bullet_lines = [line for line in sentences if line.strip().startswith(('•', '-', '*'))]
+                            bullet_lines = [
+                                line
+                                for line in sentences
+                                if line.strip().startswith(("•", "-", "*"))
+                            ]
                             if bullet_lines:
-                                answer = '\n'.join(bullet_lines)
-                                logger.warning(f"[RAGService.query] 답변이 중간에 잘린 것으로 감지되어 요약 bullet만 남김")
-            
+                                answer = "\n".join(bullet_lines)
+                                logger.warning(
+                                    "[RAGService.query] 답변이 중간에 잘린 것으로 감지되어 요약 bullet만 남김"
+                                )
+
             # 답변이 너무 짧으면 경고
             if answer and len(answer) < 50:
-                logger.warning(f"[RAGService.query] 답변이 너무 짧음 ({len(answer)}자). LLM 응답이 제대로 추출되지 않았을 수 있습니다.")
+                logger.warning(
+                    f"[RAGService.query] 답변이 너무 짧음 ({len(answer)}자). LLM 응답이 제대로 추출되지 않았을 수 있습니다."
+                )
         except Exception as e:
-            logger.error(f"[RAGService.query] LLM 호출 예외: {type(e).__name__}: {str(e)}", exc_info=True)
+            logger.error(
+                f"[RAGService.query] LLM 호출 예외: {type(e).__name__}: {str(e)}",
+                exc_info=True,
+            )
             answer = f"LLM 호출 중 오류가 발생했습니다: {str(e)}"
 
         logger.info(f"[RAG 타이밍] LLM 답변 생성: {time.time() - _t_stage:.2f}s")
@@ -1919,7 +2301,9 @@ class RAGService:
             "model": final_model,
         }
 
-        self.cache_service.cache_response(_cache_query, response, cache_context=cache_context)
+        self.cache_service.cache_response(
+            _cache_query, response, cache_context=cache_context
+        )
         return response
 
 
