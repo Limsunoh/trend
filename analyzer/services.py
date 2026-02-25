@@ -43,6 +43,7 @@ _STOPWORDS_FILE_MTIME: Optional[float] = None  # 파일 수정 시간
    - compare_platforms(): 뉴스와 SNS 플랫폼 비교 분석
 
 4. 시간차 분석:
+4. 시간차 분석:
    - analyze_time_lag(): 뉴스와 SNS 간 키워드 전파 패턴 분석
 
 5. 트렌드 분석:

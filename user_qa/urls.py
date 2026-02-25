@@ -1,13 +1,18 @@
-from django.urls import path
+from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from .views import QueryHistoryViewSet, VectorDocumentViewSet, convert_to_vector, query
+from .views import (
+    QueryHistoryViewSet,
+    RAGQueryViewSet,
+    ConvertToVectorViewSet,
+)
 
 router = DefaultRouter()
-router.register(r"vectors", VectorDocumentViewSet, basename="vectordocument")
-router.register(r"history", QueryHistoryViewSet, basename="queryhistory")
+# router.register(r"vectors", VectorDocumentViewSet, basename="vectors")
+router.register(r"history", QueryHistoryViewSet, basename="history")
+router.register(r"query", RAGQueryViewSet, basename="query")
+router.register(r"convert", ConvertToVectorViewSet, basename="convert")
 
 urlpatterns = [
-    path("query/", query, name="query"),
-    path("convert/", convert_to_vector, name="convert_to_vector"),
-] + router.urls
+    path("", include(router.urls)),
+]

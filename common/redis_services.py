@@ -176,23 +176,69 @@ class RAGCacheService(RedisService):
     def get_cache_key(self, query: str) -> str:
         """쿼리 정규화(lower, strip) 후 MD5 해시로 캐시 키 생성. 유사 질문 동일 키."""
         normalized = query.lower().strip()
-        query_hash = hashlib.md5(normalized.encode()).hexdigest()
-        return f"{self.CACHE_PREFIX}{query_hash}"
 
-    def get_cached_response(self, query: str) -> Optional[Dict]:
-        """캐시된 RAG 응답 딕셔너리 반환. 없거나 만료 시 None."""
-        cache_key = self.get_cache_key(query)
+        # 컨텍스트 정보를 캐시 키에 포함
+        # 동일 쿼리라도 top_k, include_sources 등이 다르면 다른 캐시 키 생성
+        if cache_context:
+            context_str = json.dumps(cache_context, sort_keys=True)
+            normalized = f"{normalized}:{context_str}"
+
+        # MD5 해시를 사용하여 고정 길이 키 생성
+        query_hash = hashlib.md5(normalized.encode()).hexdigest()
+
+        return f"{self.CACHE_PREFIX}{query_hash}"
+    
+    def get_cached_response(self, query: str, cache_context: Optional[Dict] = None) -> Optional[Dict]:
+        """
+        캐시된 답변 조회
+
+        Redis에서 해당 쿼리의 캐시된 응답을 조회합니다.
+        캐시가 없거나 만료된 경우 None을 반환합니다.
+
+        Args:
+            query: 사용자 질의 텍스트
+            cache_context: 캐시 키에 포함할 컨텍스트 (top_k, include_sources 등)
+
+        Returns:
+            캐시된 응답 딕셔너리 또는 None
+        """
+        # 쿼리와 컨텍스트를 기반으로 캐시 키 생성
+        cache_key = self.get_cache_key(query, cache_context)
+
+        # Redis에서 값 조회
         cached = self.client.get(cache_key)
+
         if cached:
             return json.loads(cached)
+
         return None
+    
+    def cache_response(self, query: str, response: Dict, ttl: Optional[int] = None, cache_context: Optional[Dict] = None):
+        """
+        RAG 응답 캐싱
 
-    def cache_response(self, query: str, response: Dict, ttl: Optional[int] = None):
-        """RAG 응답을 JSON으로 저장. ttl 미지정 시 기본 24시간."""
-        cache_key = self.get_cache_key(query)
+        LLM으로 생성한 응답을 Redis에 저장합니다.
+        SETEX 명령어를 사용하여 키와 함께 TTL(Time To Live)을 설정합니다.
+
+        Args:
+            query: 사용자 질의 텍스트
+            response: LLM 응답 딕셔너리 (예: {'answer': '...', 'sources': [...]})
+            ttl: 캐시 유지 시간(초). None이면 기본값(24시간) 사용
+            cache_context: 캐시 키에 포함할 컨텍스트 (top_k, include_sources 등)
+        """
+        # 캐시 키 생성 (컨텍스트 포함)
+        cache_key = self.get_cache_key(query, cache_context)
+
+        # TTL 설정 (지정하지 않으면 기본값 사용)
         ttl = ttl or self.CACHE_TTL
-        self.client.setex(cache_key, ttl, json.dumps(response, ensure_ascii=False))
 
+        # Redis에 저장
+        self.client.setex(
+            cache_key,
+            ttl,
+            json.dumps(response, ensure_ascii=False)
+        )
+    
     def invalidate_cache(self, query: str):
         """해당 쿼리의 캐시만 삭제. 갱신이 필요할 때 사용."""
         cache_key = self.get_cache_key(query)

@@ -3,6 +3,7 @@ import { API_BASE } from '../config'
 
 const DASHBOARD_BASE = `${API_BASE}/api/dashboard`
 const ANALYZER_BASE = `${API_BASE}/api/analyzer`
+const QA_BASE = `${API_BASE}/api/user_qa`
 
 const dashboardApi = axios.create({
   baseURL: DASHBOARD_BASE,
@@ -11,6 +12,11 @@ const dashboardApi = axios.create({
 
 const analyzerApi = axios.create({
   baseURL: ANALYZER_BASE,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+const qaApi = axios.create({
+  baseURL: QA_BASE,
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -34,6 +40,13 @@ export const analyzerAPI = {
   getTrendSynchronizationAnalysis: (params = {}) => analyzerApi.get('/analysis/trend-synchronization/', { params }),
   getHourlyTrendsAnalysis: (params = {}) => analyzerApi.get('/analysis/hourly-trends/', { params }),
   getEngagementKeywordsAnalysis: (params = {}) => analyzerApi.get('/analysis/engagement-keywords/', { params }),
+}
+
+// QA APIs (api/user_qa/ 기준)
+export const qaAPI = {
+  submitQuery: (data) => qaApi.post('/query/', data),
+  getHistory: (params = {}) => qaApi.get('/history/', { params }),
+  getHistoryItem: (id) => qaApi.get(`/history/${id}/`),
 }
 
 export default dashboardApi

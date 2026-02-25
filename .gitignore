@@ -1,6 +1,3 @@
-NewsSource_RSS.csv
-TROUBLESHOOTING.md
-
 # Python
 __pycache__/
 *.py[cod]
@@ -66,5 +63,15 @@ dump.rdb
 .coverage
 htmlcov/
 
+# Reports
+reports/
+
+nul
+
+# Vector DB / Chroma
+chroma_db/
+vector_db/
+*.sqlite3
+*.bin
 # Reports
 reports/

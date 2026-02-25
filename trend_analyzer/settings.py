@@ -213,9 +213,73 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
-CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
-CELERY_BEAT_SCHEDULE = {}
+# ✅ 임베딩 태스크를 전용 큐로 분리 (ChromaDB 동시 쓰기 방지)
+# 임베딩 worker: celery -A trend_analyzer worker --pool=solo --queues=embedding -c 1
+# 수집 worker:   celery -A trend_analyzer worker --pool=prefork --queues=celery -c 4
+CELERY_TASK_ROUTES = {
+    'user_qa.tasks.embed_recent_news_articles_task': {'queue': 'embedding'},
+    'user_qa.tasks.embed_recent_social_posts_task': {'queue': 'embedding'},
+}
+
+# Celery Beat Schedule
+# data_collector와 analyzer 태스크를 함께 스케줄링할 수 있습니다.
+# 
+# CELERY_BEAT_SCHEDULE = {
+#     # 데이터 수집 (예: 1시간마다)
+#     'collect-all-news': {
+#         'task': 'data_collector.collect_all_rss_news_task',
+#         'schedule': timedelta(hours=1),
+#     },
+#     'collect-all-social': {
+#         'task': 'data_collector.collect_all_social_media_task',
+#         'schedule': timedelta(hours=1),
+#     },
+#     # 데이터 수집 후 분석 (예: 6시간마다)
+#     'analyze-time-lag': {
+#         'task': 'analyzer.analyze_time_lag_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'detect-surge-keywords': {
+#         'task': 'analyzer.detect_surge_keywords_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'analyze-trend-synchronization': {
+#         'task': 'analyzer.analyze_trend_synchronization_task',
+#         'schedule': timedelta(hours=6),
+#     },
+#     'analyze-hourly-trends': {
+#         'task': 'analyzer.analyze_hourly_trends_task',
+#         'schedule': timedelta(hours=6),
+#     },
+# }
+
+CELERY_BEAT_SCHEDULE = {
+    # ✅ 안전망: 자동 임베딩 트리거가 실패한 경우를 대비한 주기적 임베딩
+    # check_session_completion에서 이벤트 기반으로 트리거하지만,
+    # 네트워크 오류/워커 다운 등으로 놓친 데이터를 30분마다 소급 처리
+    'embed-unprocessed-news': {
+        'task': 'user_qa.tasks.embed_recent_news_articles_task',
+        'schedule': timedelta(minutes=30),
+        'kwargs': {
+            'since': None,
+            'collection': None,
+            'limit': 5000,
+        },
+        'options': {'queue': 'embedding'},
+    },
+    'embed-unprocessed-social': {
+        'task': 'user_qa.tasks.embed_recent_social_posts_task',
+        'schedule': timedelta(minutes=30),
+        'kwargs': {
+            'since': None,
+            'collection': None,
+            'limit': 5000,
+        },
+        'options': {'queue': 'embedding'},
+    },
+}
 
 # AWS S3 Configuration
 USE_S3 = os.getenv("USE_S3", "False") == "True"
@@ -303,12 +367,23 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 # RAG & Vector DB Configuration
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-EMBEDDING_MODEL = os.getenv(
-    "EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-)
-VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", BASE_DIR / "vector_db")
-CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", BASE_DIR / "chroma_db")
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
+OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
+# gpt-5는 reasoning 토큰이 output에서 차감되므로 충분히 높게 설정
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "1500"))
+EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+VECTOR_DB_PATH = os.getenv('VECTOR_DB_PATH', BASE_DIR / 'vector_db')
+CHROMA_PERSIST_DIR = os.getenv('CHROMA_PERSIST_DIR', BASE_DIR / 'chroma_db')
+
+# RAG Quality Gating Thresholds
+# L2² 거리 기준 (정규화 임베딩: L2² = 2*(1-cos_sim))
+# 1.05 → cos_sim 0.475 미만만 차단 (진정한 무관 문서)
+RAG_HARD_DISTANCE_THRESHOLD = float(os.getenv("RAG_HARD_DISTANCE_THRESHOLD", "1.05"))
+# 평균 거리 0.65 초과 → LLM에 "low" 시그널
+RAG_WEAK_RELEVANCE_THRESHOLD = float(os.getenv("RAG_WEAK_RELEVANCE_THRESHOLD", "0.65"))
+RAG_NEWS_DISTANCE_THRESHOLD = float(os.getenv("RAG_NEWS_DISTANCE_THRESHOLD", "0.90"))
+RAG_COMMUNITY_DISTANCE_THRESHOLD = float(os.getenv("RAG_COMMUNITY_DISTANCE_THRESHOLD", "0.90"))
 
 # Logging Configuration
 LOGGING = {
@@ -340,6 +415,15 @@ LOGGING = {
             "level": "DEBUG",  # DEBUG 레벨로 설정하여 상세 로그 확인
             "propagate": False,
         },
+        'user_qa': {
+            'handlers': ['console'],
+            'level': 'DEBUG',  # DEBUG 레벨로 설정하여 상세 로그 확인
+            'propagate': False,
+        },
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
         "django": {
             "handlers": ["console"],
             "level": "INFO",

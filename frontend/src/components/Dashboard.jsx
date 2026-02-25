@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import DataCollectorSection from './DataCollectorSection'
 import AnalyzerSection from './AnalyzerSection'
+import QASection from './QASection'
 import '../index.css'
 
 const SECTION_PARAM = 'section'
@@ -14,7 +15,7 @@ function Dashboard() {
   // URL과 탭 동기화 (뒤로가기 시 분석 결과 탭 복원)
   useEffect(() => {
     const section = searchParams.get(SECTION_PARAM) || 'data-collector'
-    if (section === 'data-collector' || section === 'analyzer') {
+    if (section === 'data-collector' || section === 'analyzer' || section === 'qa') {
       setActiveTab(section)
     }
   }, [searchParams])
@@ -23,7 +24,7 @@ function Dashboard() {
     setActiveTab(tab)
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
-      next.set(SECTION_PARAM, tab === 'data-collector' ? 'data-collector' : 'analyzer')
+      next.set(SECTION_PARAM, tab)
       return next
     })
   }
@@ -45,11 +46,18 @@ function Dashboard() {
           >
             분석 결과
           </button>
+          <button
+            className={activeTab === 'qa' ? 'active' : ''}
+            onClick={() => handleTabChange('qa')}
+          >
+            Q&A
+          </button>
         </div>
       </div>
 
       {activeTab === 'data-collector' && <DataCollectorSection />}
       {activeTab === 'analyzer' && <AnalyzerSection />}
+      {activeTab === 'qa' && <QASection />}
     </div>
   )
 }

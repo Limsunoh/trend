@@ -244,6 +244,8 @@ class NewsArticleSerializer(serializers.ModelSerializer):
     )
 
     # 발행 시간 형식화 (한글/로컬 표시용)
+
+    # 발행 시간 형식화 (한글/로컬 표시용)
     published_at_display = serializers.DateTimeField(
         read_only=True,
         source="published_at",
@@ -265,6 +267,7 @@ class NewsArticleSerializer(serializers.ModelSerializer):
         """
 
         model = NewsArticle
+
 
         # 모든 필드 포함
         fields = "__all__"

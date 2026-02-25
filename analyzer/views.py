@@ -5,7 +5,9 @@
 from datetime import datetime
 from datetime import time as dt_time
 from typing import Optional
-
+from rest_framework import viewsets
+from rest_framework.filters import SearchFilter, OrderingFilter
+from django.db.models import QuerySet
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
@@ -17,6 +19,7 @@ from common.rate_limit import ReadAPIThrottle
 
 
 def _make_aware(value: Optional[datetime]) -> Optional[datetime]:
+    """문자열로 들어온 날짜를 현재 타임존 기준 aware datetime으로 변환"""
     """문자열로 들어온 날짜를 현재 타임존 기준 aware datetime으로 변환"""
     if value and timezone.is_naive(value):
         return timezone.make_aware(value, timezone.get_current_timezone())
@@ -30,6 +33,7 @@ _COMMON_LANG_PARAMETER = OpenApiParameter(
     required=False,
 )
 
+_LIST_ANALYSIS_PARAMETERS = [
 _LIST_ANALYSIS_PARAMETERS = [
     _COMMON_LANG_PARAMETER,
     OpenApiParameter(
@@ -59,6 +63,7 @@ class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = None
 
     def get_queryset(self):
+        queryset = TrendAnalysisResult.objects.all()
         queryset = TrendAnalysisResult.objects.all()
         params = self.request.query_params
 
@@ -122,7 +127,21 @@ class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
         if days_param:
             try:
                 days = int(days_param)
+                days = int(days_param)
             except ValueError:
+                pass
+        return platform, days
+
+    @extend_schema(parameters=_LIST_ANALYSIS_PARAMETERS)
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    def get_queryset(self):
+        queryset = TrendAnalysisResult.objects.all()
+        if self.analysis_type:
+            queryset = queryset.filter(analysis_type=self.analysis_type)
+        platform, days = self._parse_url_params()
+        if platform:
                 pass
         return platform, days
 
