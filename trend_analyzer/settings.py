@@ -35,6 +35,8 @@ if _sentry_dsn:
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# loaddata가 찾는 fixture 디렉터리 (프로젝트 루트의 fixtures/ → Docker에서는 /app/fixtures)
+FIXTURE_DIRS = [BASE_DIR / "fixtures"]
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
@@ -119,11 +121,8 @@ def _safe_db_str(value: str) -> str:
         return value
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
-    try:
-        value.encode("utf-8")
-        return value
-    except UnicodeEncodeError:
-        return value.encode("cp949", errors="replace").decode("utf-8", errors="replace")
+    # str도 UTF-8로 정규화 (psycopg2 연결 시 decode 오류 방지)
+    return value.encode("utf-8", errors="replace").decode("utf-8")
 
 
 DATABASES = {

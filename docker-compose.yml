@@ -1,6 +1,8 @@
 services:
   db:
     image: postgres:15-alpine
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: trend_db
       POSTGRES_USER: team_user
@@ -33,11 +35,13 @@ services:
              exec gunicorn --bind 0.0.0.0:8000 --workers 3 trend_analyzer.wsgi:application"
     ports:
       - "8000:8000"
+    volumes:
+      - ./fixtures:/app/fixtures
     env_file:
       - .env
     environment:
-      DB_HOST: ${DB_HOST:-db}
-      DB_PORT: ${DB_PORT:-5432}
+      DB_HOST: db
+      DB_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     depends_on:
@@ -45,6 +49,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
 
   celery_worker:
     build: .
@@ -52,8 +62,8 @@ services:
     env_file:
       - .env
     environment:
-      DB_HOST: ${DB_HOST:-db}
-      DB_PORT: ${DB_PORT:-5432}
+      DB_HOST: db
+      DB_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     depends_on:
@@ -62,7 +72,7 @@ services:
       redis:
         condition: service_healthy
       web:
-        condition: service_started
+        condition: service_healthy
 
   celery_beat:
     build: .
@@ -70,8 +80,8 @@ services:
     env_file:
       - .env
     environment:
-      DB_HOST: ${DB_HOST:-db}
-      DB_PORT: ${DB_PORT:-5432}
+      DB_HOST: db
+      DB_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     depends_on:
@@ -80,7 +90,7 @@ services:
       redis:
         condition: service_healthy
       web:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres_data:
