@@ -37,6 +37,7 @@ services:
       - "8000:8000"
     volumes:
       - ./fixtures:/app/fixtures
+      - chroma_data:/app/chroma_db
     env_file:
       - .env
     environment:
@@ -58,7 +59,9 @@ services:
 
   celery_worker:
     build: .
-    command: celery -A trend_analyzer worker -l info -E
+    command: celery -A trend_analyzer worker -l info -E -Q celery,embedding --pool=solo
+    volumes:
+      - chroma_data:/app/chroma_db
     env_file:
       - .env
     environment:
@@ -94,3 +97,4 @@ services:
 
 volumes:
   postgres_data:
+  chroma_data:
