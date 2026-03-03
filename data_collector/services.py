@@ -8,7 +8,9 @@
 import csv
 import logging
 import os
+import random
 import re
+import time
 from datetime import datetime
 from html import unescape
 from time import mktime, struct_time
@@ -1190,6 +1192,9 @@ class DCInsideCollectorService:
             # 최근 1-3페이지 수집
             self.logger.info(f"갤러리 '{gall_name}' 글 목록 수집 시작 (1-3페이지)")
 
+            # 여러 DC 소스가 동시에 돌 때 요청이 한꺼번에 가지 않도록 초기 지연
+            time.sleep(random.uniform(0.5, 2.0))
+
             try:
                 # TROUBLESHOOTING.md 예제에 따르면 위치 인자로 전달
                 # selenium_title(gall_name, start_page, end_page, headless, reuse_driver)
@@ -1285,6 +1290,9 @@ class DCInsideCollectorService:
                     if SocialMediaPost.objects.filter(url=post_url).exists():
                         items_skipped += 1
                         continue
+
+                    # 글 상세 요청 간 간격 (봇 탐지 완화, AWS 등에서도 유지)
+                    time.sleep(random.uniform(1.2, 2.8))
 
                     # 게시글 상세 정보 가져오기 (dcapi.read.post 사용)
                     # URL 패턴으로 마이너 갤러리 여부를 미리 확인했으므로 바로 적절한 모드로 호출

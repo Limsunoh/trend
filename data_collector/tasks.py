@@ -10,6 +10,7 @@
 태스크들은 RSSCollectorService 클래스를 사용하여 실제 수집 작업을 수행합니다.
 """
 
+import json
 import logging
 from datetime import timedelta
 from typing import Optional
@@ -17,6 +18,8 @@ from typing import Optional
 from celery import current_app, shared_task
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
+
+from common.redis_services import RedisService
 
 from .models import CollectionSession, DataCollectionJob, NewsSource, SocialMediaSource
 from .report_service import CollectionReportService
@@ -119,7 +122,7 @@ def collect_rss_news_task(
 
 
 @shared_task
-def collect_all_rss_news_task():
+def collect_all_rss_news_task(run_id: Optional[str] = None):
     """
     모든 활성화된 RSS 소스에서 뉴스를 수집하는 Celery 태스크
 
@@ -134,13 +137,20 @@ def collect_all_rss_news_task():
 
     수집이 완료되면 자동으로 리포트(JSON, 마크다운)를 생성합니다.
 
+    Args:
+        run_id: full_collect_and_analyze에서 전달. 뉴스+소셜 둘 다 완료 시 분석 트리거용.
+
     사용 예시:
         # 모든 활성화된 소스 수집 시작
         collect_all_rss_news_task.delay()
+        # full_collect_and_analyze에서 호출 시
+        collect_all_rss_news_task.delay(run_id="uuid-xxx")
     """
-    # 수집 세션 생성
+    notes = "session_type:news"
+    if run_id:
+        notes = f"session_type:news run_id:{run_id}"
     session = CollectionSession.objects.create(
-        status="running", started_at=timezone.now(), notes="session_type:news"
+        status="running", started_at=timezone.now(), notes=notes
     )
 
     # 활성화된 모든 RSS 소스 조회
@@ -266,6 +276,43 @@ def _trigger_embedding_for_session(session_id: int, session_type: str):
             f"[자동 임베딩 트리거 실패] 세션 #{session_id}: {str(e)}", exc_info=True
         )
         return []
+
+
+def _trigger_analysis_after_full_collect(
+    days: int = 7, top_n: int = 50, platform: str = "both"
+):
+    """
+    full_collect_and_analyze의 뉴스+소셜 세션이 둘 다 완료된 후, 8개 분석 태스크를 트리거합니다.
+    check_session_completion에서 호출.
+    """
+    try:
+        app = current_app
+        tasks_to_send = [
+            ("analyzer.analyze_keywords_task", {"days": days, "top_n": top_n}),
+            (
+                "analyzer.compare_platforms_task",
+                {"days": days, "top_n": min(30, top_n)},
+            ),
+            ("analyzer.update_hot_keywords", {"days": 1, "top_n": 20}),
+            ("analyzer.analyze_time_lag_task", {"days": days, "top_n": top_n}),
+            (
+                "analyzer.detect_surge_keywords_task",
+                {"platform": platform, "days": days},
+            ),
+            ("analyzer.analyze_trend_synchronization_task", {"days": days}),
+            (
+                "analyzer.analyze_hourly_trends_task",
+                {"platform": platform, "days": days},
+            ),
+            ("analyzer.analyze_engagement_keywords_task", {"days": days}),
+        ]
+        for task_name, kwargs in tasks_to_send:
+            app.send_task(task_name, kwargs=kwargs)
+        logger.info(
+            "[자동 분석 트리거] 뉴스+소셜 세션 완료 후 8개 분석 태스크 등록 완료"
+        )
+    except Exception as e:
+        logger.error(f"[자동 분석 트리거 실패] {str(e)}", exc_info=True)
 
 
 @shared_task
@@ -404,6 +451,37 @@ def check_session_completion(session_id: int):
             # ✅ 자동 임베딩 트리거: 세션 완료 후 수집된 데이터를 벡터DB에 임베딩
             embedding_session_type = session_type_from_notes or "unknown"
             _trigger_embedding_for_session(session.id, embedding_session_type)
+
+            # ✅ full_collect_and_analyze: 뉴스+소셜 둘 다 완료 시 분석 트리거
+            run_id = None
+            if session.notes and "run_id:" in session.notes:
+                idx = session.notes.find("run_id:")
+                if idx >= 0:
+                    run_id = session.notes[idx + 7 :].strip().split()[0]
+            if run_id:
+                try:
+                    redis_svc = RedisService()
+                    redis_key = f"full_collect_run:{run_id}"
+                    raw = redis_svc.client.get(redis_key)
+                    if raw:
+                        data = json.loads(raw)
+                        if session_type_from_notes == "news":
+                            data["news_done"] = True
+                        elif session_type_from_notes == "social":
+                            data["social_done"] = True
+                        if data.get("news_done") and data.get("social_done"):
+                            redis_svc.client.delete(redis_key)
+                            _trigger_analysis_after_full_collect(
+                                days=data.get("days", 7),
+                                top_n=data.get("top_n", 50),
+                                platform=data.get("platform", "both"),
+                            )
+                        else:
+                            redis_svc.client.setex(redis_key, 7200, json.dumps(data))
+                except Exception as e:
+                    logger.warning(
+                        f"[full_collect 분석 트리거] run_id={run_id} Redis 처리 실패: {e}"
+                    )
     else:
         # 아직 완료되지 않았으면 5분 후 다시 체크
         # 단, 세션이 여전히 running 상태인지 확인
@@ -574,7 +652,7 @@ def collect_reddit_rss_task(
 
 
 @shared_task
-def collect_all_social_media_task():
+def collect_all_social_media_task(run_id: Optional[str] = None):
     """
     모든 활성화된 소셜 미디어 소스에서 데이터를 수집하는 Celery 태스크
 
@@ -590,13 +668,20 @@ def collect_all_social_media_task():
 
     수집이 완료되면 자동으로 리포트(JSON, 마크다운)를 생성합니다.
 
+    Args:
+        run_id: full_collect_and_analyze에서 전달. 뉴스+소셜 둘 다 완료 시 분석 트리거용.
+
     사용 예시:
         # 모든 활성화된 소셜 미디어 소스 수집 시작
         collect_all_social_media_task.delay()
+        # full_collect_and_analyze에서 호출 시
+        collect_all_social_media_task.delay(run_id="uuid-xxx")
     """
-    # 수집 세션 생성
+    notes = "session_type:social"
+    if run_id:
+        notes = f"session_type:social run_id:{run_id}"
     session = CollectionSession.objects.create(
-        status="running", started_at=timezone.now(), notes="session_type:social"
+        status="running", started_at=timezone.now(), notes=notes
     )
 
     # 활성화된 모든 소셜 미디어 소스 조회

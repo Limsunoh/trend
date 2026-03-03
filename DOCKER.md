@@ -38,6 +38,14 @@ docker compose down
 - API: http://localhost:8000
 - Swagger: http://localhost:8000/api/schema/swagger-ui/
 
+## Django superuser 만들기
+
+Docker Compose로 띄운 DB를 쓰는 웹 컨테이너에서 Django 관리자(superuser) 계정을 만듭니다. 실행 후 터미널에서 username, email, password를 입력하라는 프롬프트가 나옵니다.
+
+```bash
+docker compose exec web python manage.py createsuperuser
+```
+
 ## 볼륨
 
 - `postgres_data`: PostgreSQL 데이터 영구 보관
@@ -95,6 +103,24 @@ python manage.py dumpdata data_collector.NewsSource data_collector.SocialMediaSo
 - **"The \"ryj\" variable is not set"** 경고: `.env` 값에 `$`가 있으면 Docker가 변수로 해석합니다. 해당 값에서 `$`를 `$$`로 바꾸면 됩니다.
 
 - 이미 Docker를 다시 띄우기 전이라면: 1단계로 JSON 생성 → `docker compose up -d` 후 2단계 실행하면 됩니다.
+
+### loaddata 시 UTF-8 / UnicodeDecodeError
+
+덤프된 `sources_fixture.json`을 Docker DB(5433)에 넣을 때 `UnicodeDecodeError` 또는 UTF-8 관련 에러가 나면, **덤프 파일을 인코딩 안전 스크립트로 다시 만든 뒤** 같은 loaddata를 다시 실행하면 됩니다.
+
+1. **덤프를 인코딩 안전 스크립트로 다시 생성** (로컬 DB 5432에서, 깨진 문자는 자동 치환됨):
+
+   ```bash
+   python scripts/dump_sources_from_local_db.py -o fixtures/sources_fixture.json
+   ```
+
+2. **Docker DB에 로드** (필요 시 UTF-8 강제):
+
+   ```bash
+   docker compose exec -e PYTHONUTF8=1 web python manage.py loaddata sources_fixture
+   ```
+
+- `manage.py dump_sources_fixture`나 `dumpdata`로 만든 JSON은 로컬 DB에 깨진 문자가 있으면 그대로 들어가서, loaddata 시 에러가 날 수 있습니다. 이 경우 위 1번 스크립트로 덤프를 다시 만들면 됩니다.
 
 ## 문제 해결
 

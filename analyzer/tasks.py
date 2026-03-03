@@ -4,7 +4,9 @@ Celery 작업 모듈
 비동기로 키워드 분석 작업을 수행하는 Celery 태스크들을 정의합니다.
 """
 
+import json
 import logging
+import uuid
 from datetime import timedelta
 from typing import Dict, Optional
 
@@ -663,7 +665,6 @@ def full_collect_and_analyze_task(
         collect_all_social_media_task,
     )
 
-    # 중복 실행 방지: 최근 N분 안에 수집 세션이 실행 중이면 스킵 (force=True면 생략)
     if not force:
         RECENT_MINUTES = 60
         recent_time = timezone.now() - timedelta(minutes=RECENT_MINUTES)
@@ -680,30 +681,40 @@ def full_collect_and_analyze_task(
 
     logger.info("전체 수집+분석 작업 시작")
 
-    # 1. 수집 태스크 큐 등록 (뉴스 + 소셜미디어)
-    news_result = collect_all_rss_news_task.delay()
-    social_result = collect_all_social_media_task.delay()
-    logger.info(
-        f"수집 태스크 등록 완료 - News: {news_result.id}, Social: {social_result.id}"
+    # run_id 생성: 뉴스+소셜 세션 둘 다 완료 시 check_session_completion에서 분석 트리거
+    run_id = str(uuid.uuid4())
+    redis_svc = __import__(
+        "common.redis_services", fromlist=["RedisService"]
+    ).RedisService()
+    redis_key = f"full_collect_run:{run_id}"
+    redis_svc.client.setex(
+        redis_key,
+        7200,  # 2시간 TTL
+        json.dumps(
+            {
+                "news_done": False,
+                "social_done": False,
+                "days": days,
+                "top_n": top_n,
+                "platform": platform,
+            }
+        ),
     )
 
-    # 2. 분석 태스크 큐 등록 (run_all_analyses --async 와 동일)
-    analyze_keywords_task.delay(days=days, top_n=top_n)
-    compare_platforms_task.delay(days=days, top_n=min(30, top_n))
-    update_hot_keywords.delay(days=min(1, days), top_n=min(20, top_n))
-    analyze_time_lag_task.delay(days=days, top_n=top_n)
-    detect_surge_keywords_task.delay(platform=platform, days=days)
-    analyze_trend_synchronization_task.delay(days=days)
-    analyze_hourly_trends_task.delay(platform=platform, days=days)
-    analyze_engagement_keywords_task.delay(days=days)
-
-    logger.info("8개 분석 태스크 등록 완료 - 전체 수집+분석 작업 큐잉 완료")
+    # 1. 수집 태스크 큐 등록 (run_id 전달 → 세션 완료 시 분석 트리거)
+    news_result = collect_all_rss_news_task.delay(run_id=run_id)
+    social_result = collect_all_social_media_task.delay(run_id=run_id)
+    logger.info(
+        f"수집 태스크 등록 완료 - News: {news_result.id}, Social: {social_result.id} "
+        f"(run_id={run_id}, 분석은 뉴스+소셜 세션 완료 후 트리거)"
+    )
 
     return {
         "status": "queued",
+        "run_id": run_id,
         "collection": {
             "news_task_id": news_result.id,
             "social_task_id": social_result.id,
         },
-        "message": "수집 2건 + 분석 8건이 큐에 등록되었습니다.",
+        "message": "수집 2건 등록. 분석 8건은 뉴스+소셜 세션 완료 후 자동 트리거.",
     }
