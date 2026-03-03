@@ -54,6 +54,7 @@ COPY --from=frontend-builder /app/frontend/dist /app/frontend_dist
 
 # Non-root user
 RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /app/chroma_db \
     && chown -R appuser:appuser /app
 USER appuser
 
