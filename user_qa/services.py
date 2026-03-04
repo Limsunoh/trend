@@ -1147,7 +1147,7 @@ class OpenAIResponsesLLM:
         final_model = (
             model
             or getattr(settings, "OPENAI_MODEL", None)
-            or os.getenv("OPENAI_MODEL", "gpt-5")
+            or os.getenv("OPENAI_MODEL", "gpt-4o")
         )
 
         # ✅ 기본값(없으면 settings/.env 사용) - 답변이 중간에 끊기지 않도록 충분한 토큰 확보
@@ -1176,75 +1176,38 @@ class OpenAIResponsesLLM:
         # (여기서는 안전하게 gpt-5*이면 temperature를 payload에서 제외)
         supports_temperature = not str(final_model).startswith("gpt-5")
 
-        system_lines = []
-        system_lines.append("당신은 뉴스/커뮤니티 트렌드 분석 Q&A 어시스턴트입니다.")
-        system_lines.append("답변은 한국어로, 자연스럽고 친근한 대화체로 작성하세요.")
-        system_lines.append(
-            "CONTEXT에는 [뉴스]와 [커뮤니티] 두 종류의 자료가 포함될 수 있습니다. "
-            "각 자료 앞에 [뉴스] 또는 [커뮤니티] 태그가 붙어 있습니다."
+        # ── System Prompt ──
+        # 설계 원칙: LlamaIndex(사전지식 금지) + LangChain(문장 수 제한) + Anthropic(context 상단 배치)
+        system_prompt = (
+            "당신은 뉴스·커뮤니티 트렌드 Q&A 어시스턴트입니다.\n"
+            "아래 규칙을 반드시 따르세요.\n\n"
+            "1. CONTEXT에 제공된 자료만 사용하여 답변하세요. 사전 지식이나 추측을 섞지 마세요.\n"
+            "2. [뉴스] 자료는 사실로 인용하고, [커뮤니티] 자료는 '온라인 반응' 수준으로만 인용하세요.\n"
+            "3. 답변은 3~5문장으로 핵심만 간결하게 작성하세요.\n"
+            "4. 근거가 부족하면 '관련 자료가 부족하지만'이라고 전제하세요. 없는 내용을 지어내지 마세요.\n"
+            "5. 기사 제목을 나열하지 말고, 이슈를 자연스럽게 풀어 설명하세요.\n"
+            "6. 답변은 한국어 존댓말(~합니다, ~있습니다, ~되었습니다)로 작성하세요. 반말(~이다, ~했다, ~있다)은 절대 사용하지 마세요.\n"
+            "7. 완전한 문장으로 끝내세요. 추가 질문이나 제안은 붙이지 마세요."
         )
-        system_lines.append(
-            "[뉴스] 자료는 언론 보도이므로 사실 기반 정보로 인용할 수 있습니다. "
-            "[커뮤니티] 자료는 온라인 커뮤니티 게시글이므로 '온라인에서는 ~라는 반응이 있다', "
-            "'커뮤니티에서는 ~라는 의견이 나온다' 등 여론/반응으로만 인용하세요."
-        )
-        system_lines.append(
-            "절대로 커뮤니티 게시글의 내용을 뉴스 보도처럼 사실로 단정하지 마세요."
-        )
-        system_lines.append(
-            "뉴스와 커뮤니티 정보가 상충할 경우, 뉴스를 사실로 우선 제시하고 "
-            "커뮤니티는 '일부에서는 다른 반응도 있다'는 정도로만 언급하세요."
-        )
-        system_lines.append(
-            "CONTEXT에 [EVIDENCE_QUALITY: low]가 표시되어 있으면, "
-            "'수집된 자료가 제한적이어서' 또는 '관련 자료가 부족하지만'이라는 전제를 반드시 붙이세요."
-        )
-        system_lines.append("CONTEXT에 없는 사실을 만들어내지 마세요.")
-        system_lines.append(
-            "각 정보의 출처 유형([뉴스] 또는 [커뮤니티])을 답변 내에서 자연스럽게 구분해 주세요."
-        )
-        system_lines.append(
-            "답변은 1~3문단으로 핵심만 간결하게 작성하세요. 불필요하게 늘리지 마세요."
-        )
-        system_lines.append(
-            "기사 제목을 나열하지 말고, 이슈를 자연스럽게 풀어 설명하세요."
-        )
-        system_lines.append(
-            "답변은 완전한 문장으로 끝내고, 추가 질문이나 제안은 붙이지 마세요."
-        )
-
         if instructions:
-            system_lines.append(f"[추가 지시사항]\n{instructions}")
+            system_prompt += f"\n\n[추가 지시사항]\n{instructions}"
 
-        system_prompt = "\n".join(system_lines)
-
-        # CONTEXT 길이 확인 및 로깅
+        # ── User Prompt ──
+        # Anthropic 방식: 긴 CONTEXT를 상단에, 질문을 하단에 배치 (성능 향상)
         context_length = len(context) if context else 0
         logger.debug(
             f"[LLM 프롬프트] 질문 길이={len(query_text)}, CONTEXT 길이={context_length}"
         )
-
-        # CONTEXT가 너무 짧으면 경고
         if context_length < 50:
             logger.warning(f"[LLM 프롬프트] CONTEXT가 너무 짧음 ({context_length}자)")
 
         user_prompt = (
-            f"[질문]\n{query_text}\n\n"
             f"[CONTEXT]\n{context}\n\n"
-            f"[지시사항]\n"
-            f"핵심: CONTEXT만을 근거로 답변하세요. CONTEXT에 없는 사실을 만들어내지 마세요.\n\n"
-            f"출처 구분:\n"
-            f"- [뉴스] 자료 → 사실 정보로 직접 인용 가능\n"
-            f"- [커뮤니티] 자료 → '온라인에서는 ~반응', '커뮤니티에서는 ~의견' 형태로만 인용\n\n"
-            f"근거 부족 시:\n"
-            f"- CONTEXT가 질문과 전혀 관련 없거나 [EVIDENCE_QUALITY: low]이면 "
-            f"'현재 수집된 데이터에서 관련 근거가 적어요.'라고 전제하고 가능한 범위에서만 답변\n\n"
-            f"형식: 완전한 문장으로 마무리하세요. 추가 질문이나 제안은 붙이지 마세요.\n"
+            f"---\n\n"
+            f"위 CONTEXT만을 근거로 다음 질문에 답변하세요.\n"
+            f"[질문] {query_text}"
         )
-
-        # 프롬프트 길이 확인
-        prompt_length = len(user_prompt)
-        logger.debug(f"[LLM 프롬프트] 전체 프롬프트 길이={prompt_length}")
+        logger.debug(f"[LLM 프롬프트] 전체 프롬프트 길이={len(user_prompt)}")
 
         payload: Dict[str, Any] = {
             "model": final_model,
@@ -1416,7 +1379,7 @@ class OpenAIResponsesLLM:
         final_model = (
             model
             or getattr(settings, "OPENAI_MODEL", None)
-            or os.getenv("OPENAI_MODEL", "gpt-5")
+            or os.getenv("OPENAI_MODEL", "gpt-4o")
         )
 
         system_prompt = (
@@ -1552,7 +1515,7 @@ class OpenAIResponsesLLM:
         final_model = (
             model
             or getattr(settings, "OPENAI_MODEL", None)
-            or os.getenv("OPENAI_MODEL", "gpt-5")
+            or os.getenv("OPENAI_MODEL", "gpt-4o")
         )
 
         system_prompt = (
@@ -1702,7 +1665,7 @@ class RAGService:
         logger.debug("[RAGService.query] 캐시 확인 중...")
 
         # ✅ 1) 최종 옵션 먼저 확정 (캐시 키 + LLM 호출 양쪽에서 공유)
-        final_model = model or _get_setting("OPENAI_MODEL", "gpt-5")
+        final_model = model or _get_setting("OPENAI_MODEL", "gpt-4o")
         final_temperature = (
             temperature
             if temperature is not None
@@ -1951,6 +1914,28 @@ class RAGService:
         logger.info(f"[RAG 검색] source_intent={source_intent}")
 
         # ========================================
+        # STEP A-2: 의도 기반 소스 타입 사전 필터링 (랭킹 전에 적용)
+        # ========================================
+        if source_intent == "news":
+            typed = [r for r in candidates if _infer_type(r.id, r.metadata) == "news"]
+            if typed:
+                logger.info(f"[RAG 필터] news intent → 후보군 {len(candidates)}개에서 뉴스 {len(typed)}개로 사전 필터")
+                candidates = typed
+            else:
+                logger.warning(
+                    f"[RAG 필터] news intent이지만 뉴스 후보 없음, {len(candidates)}개 전체 후보 유지"
+                )
+        elif source_intent == "community":
+            typed = [r for r in candidates if _infer_type(r.id, r.metadata) == "social"]
+            if typed:
+                logger.info(f"[RAG 필터] community intent → 후보군 {len(candidates)}개에서 소셜 {len(typed)}개로 사전 필터")
+                candidates = typed
+            else:
+                logger.warning(
+                    f"[RAG 필터] community intent이지만 소셜 후보 없음, {len(candidates)}개 전체 후보 유지"
+                )
+
+        # ========================================
         # STEP B: 키워드 포함(overlap) 우선으로 재랭킹 (over-fetch for filtering headroom)
         # ========================================
         min_hits = 2
@@ -1965,32 +1950,9 @@ class RAGService:
         )
 
         # ========================================
-        # STEP C: 의도 기반 소스 타입 필터링 (타입만 필터, 거리는 Step D에서 처리)
+        # STEP C: 거리 게이트 (하드 → 소프트 → fallback 단계적 적용)
         # ========================================
         hard_distance = float(_get_setting("RAG_HARD_DISTANCE_THRESHOLD", 1.05))
-
-        if source_intent == "news":
-            typed = [r for r in results if _infer_type(r.id, r.metadata) == "news"]
-            if typed:
-                results = typed
-                logger.info(f"[RAG 필터] news intent → {len(typed)}개 뉴스 선택")
-            else:
-                logger.warning(
-                    f"[RAG 필터] news intent이지만 뉴스 결과 없음, {len(results)}개 전체 결과로 대체"
-                )
-        elif source_intent == "community":
-            typed = [r for r in results if _infer_type(r.id, r.metadata) == "social"]
-            if typed:
-                results = typed
-                logger.info(f"[RAG 필터] community intent → {len(typed)}개 소셜 선택")
-            else:
-                logger.warning(
-                    f"[RAG 필터] community intent이지만 소셜 결과 없음, {len(results)}개 전체 결과로 대체"
-                )
-
-        # ========================================
-        # STEP D: 거리 게이트 (하드 → 소프트 → fallback 단계적 적용)
-        # ========================================
         force_low_quality = False
         gated = [r for r in results if r.distance <= hard_distance]
         if len(gated) >= max(int(top_k) // 2, 1):

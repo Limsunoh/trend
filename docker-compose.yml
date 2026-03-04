@@ -32,7 +32,7 @@ services:
     command: >
       sh -c "python manage.py migrate --no-input &&
              python manage.py collectstatic --no-input --clear 2>/dev/null || true &&
-             exec gunicorn --bind 0.0.0.0:8000 --workers 3 --access-logfile - --error-logfile - trend_analyzer.wsgi:application"
+             exec gunicorn --bind 0.0.0.0:8000 --workers 3 --timeout 120 --access-logfile - --error-logfile - trend_analyzer.wsgi:application"
     ports:
       - "8000:8000"
     volumes:
