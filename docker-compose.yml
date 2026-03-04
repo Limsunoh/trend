@@ -10,7 +10,7 @@ services:
       retries: 5
 
   web:
-    build: .
+    image: limsunoh/trend:latest
     command: >
       sh -c "python manage.py migrate --no-input &&
              python manage.py collectstatic --no-input --clear 2>/dev/null || true &&
@@ -37,7 +37,7 @@ services:
       start_period: 90s
 
   celery_worker:
-    build: .
+    image: limsunoh/trend:latest
     command: celery -A trend_analyzer worker -l info -E -Q celery,embedding --pool=solo
     volumes:
       - ./certs:/app/certs
@@ -54,7 +54,7 @@ services:
         condition: service_healthy
 
   celery_beat:
-    build: .
+    image: limsunoh/trend:latest
     command: celery -A trend_analyzer beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     volumes:
       - ./certs:/app/certs
