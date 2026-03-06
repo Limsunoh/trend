@@ -146,8 +146,8 @@ function QASection() {
                           <div className="qa-sources-list">
                             {msg.sources.map((src, sIdx) => (
                               <div key={sIdx} className="qa-source-item">
-                                <span className={`qa-type-badge ${src.type === 'news' ? 'news' : 'social'}`}>
-                                  {src.type === 'news' ? '뉴스' : '커뮤니티'}
+                                <span className={`qa-type-badge ${src.type === 'news' ? 'news' : src.type === 'analysis' ? 'analysis' : 'social'}`}>
+                                  {src.type === 'news' ? '뉴스' : src.type === 'analysis' ? '분석' : '커뮤니티'}
                                 </span>
                                 {src.url ? (
                                   <a
