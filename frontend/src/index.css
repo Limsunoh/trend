@@ -673,6 +673,10 @@ code {
   background: #8e44ad;
 }
 
+.qa-type-badge.analysis {
+  background: #2980b9;
+}
+
 .qa-input-area {
   display: flex;
   gap: 8px;

@@ -635,72 +635,668 @@ def _search_reddit_by_title(
     return results
 
 
+# ========================================
+# 공통 단어 사전 (한 곳에서 관리)
+# ========================================
+
+# 강도 접두어: "가장 ~", "제일 ~", "최고로 ~" 등
+INTENSITY_PREFIXES = [
+    "가장", "제일", "최고로", "최고", "젤",
+    "완전", "엄청", "진짜", "되게", "매우", "정말", "너무",
+]
+
+# 인기/주목 수식어: "~ 유명한", "~ 핫한" 등
+POPULARITY_WORDS = [
+    "유명", "핫", "인기", "뜨는", "뜨거운", "뜨고",
+    "화제", "주목", "난리", "대박",
+]
+
+# 키워드 수식어: "키워드" 앞에 붙어서 분석 의도를 나타내는 단어
+KEYWORD_QUALIFIERS = [
+    "핫", "인기", "급상승", "급등", "뜨는", "뜨고",
+    "트렌드", "많이", "자주", "요즘", "최근",
+    "상위", "톱", "top", "hot", "popular",
+]
+
+# 뉴스 출처 감지 키워드
+NEWS_INDICATORS = [
+    "뉴스", "기사", "보도", "언론", "신문", "매체",
+    "보도자료", "속보", "헤드라인", "방송", "취재",
+    "리포트", "보도내용", "news", "article", "press", "report",
+]
+
+# 커뮤니티 출처 감지 키워드
+COMMUNITY_INDICATORS = [
+    "커뮤니티", "게시글", "게시판", "반응", "여론", "댓글",
+    "디시", "dcinside", "레딧", "reddit", "갤러리", "유저",
+    "네티즌", "온라인반응", "온라인 반응", "sns", "소셜",
+    "트위터", "엑스", "인스타", "페이스북", "유튜브",
+    "블로그", "카페", "클리앙", "루리웹", "에펨코리아",
+]
+
+# 분석 의도 감지 — 직접 매칭되는 구문 (띄어쓰기 무관 매칭은 아래 함수에서 처리)
+_ANALYSIS_DIRECT_PHRASES = [
+    "분석 결과", "분석결과",
+    "플랫폼 비교", "플랫폼비교",
+    "시간차 분석", "시간차분석",
+    "트렌드 분석", "트렌드분석",
+    "트렌드 동기화", "동기화 분석",
+    "시간대별 분석", "시간대별 트렌드",
+    "참여도 분석", "참여도 키워드",
+    "많이 언급", "자주 언급", "자주 등장",
+    "surge", "engagement",
+]
+
+
+def _has_news_intent(q: str) -> bool:
+    """쿼리에 뉴스 출처 의도가 있는지 판별 (대소문자 무시)"""
+    q_l = q.lower()
+    return any(kw in q_l for kw in NEWS_INDICATORS)
+
+
+def _has_community_intent(q: str) -> bool:
+    """쿼리에 커뮤니티 출처 의도가 있는지 판별 (대소문자 무시)"""
+    q_l = q.lower()
+    return any(kw in q_l for kw in COMMUNITY_INDICATORS)
+
+
 def _detect_source_intent(query_text: str) -> str:
     """
-    사용자가 뉴스/커뮤니티 중 어떤 출처를 원하는지 키워드 기반으로 판별.
-    LLM 호출 없이 순수 키워드 매칭.
+    사용자가 뉴스/커뮤니티/분석결과 중 어떤 출처를 원하는지 키워드 기반으로 판별.
+    LLM 호출 없이 순수 키워드 매칭 + 조합 매칭.
 
-    Returns: "news", "community", or "any"
+    Returns: "news", "community", "analysis", "analysis+search",
+             "trend_enhanced", or "any"
     """
     q = (query_text or "").strip().lower()
 
-    news_keywords = [
-        "뉴스",
-        "기사",
-        "보도",
-        "언론",
-        "신문",
-        "매체",
-        "보도자료",
-        "속보",
-        "헤드라인",
-        "방송",
-        "취재",
-        "리포트",
-        "보도내용",
-        "news",
-        "article",
-        "press",
-        "report",
-    ]
-    community_keywords = [
-        "커뮤니티",
-        "게시글",
-        "게시판",
-        "반응",
-        "여론",
-        "댓글",
-        "디시",
-        "dcinside",
-        "레딧",
-        "reddit",
-        "갤러리",
-        "유저",
-        "네티즌",
-        "온라인반응",
-        "온라인 반응",
-        "SNS",
-        "소셜",
-        "트위터",
-        "엑스",
-        "인스타",
-        "페이스북",
-        "유튜브",
-        "블로그",
-        "카페",
-        "클리앙",
-        "루리웹",
-        "에펨코리아",
-    ]
+    # ── 1) 분석 의도: 직접 구문 매칭 또는 "키워드" + 수식어 조합 ──
+    has_keyword_word = "키워드" in q
+    has_qualifier = any(qual in q for qual in KEYWORD_QUALIFIERS)
 
-    has_news = any(kw in q for kw in news_keywords)
-    has_community = any(kw in q for kw in community_keywords)
+    has_analysis = (
+        any(phrase in q for phrase in _ANALYSIS_DIRECT_PHRASES)
+        or (has_keyword_word and has_qualifier)
+        or (has_keyword_word and any(w in q for w in POPULARITY_WORDS))
+    )
+
+    # ── 2) 순위/인기도 감지: 강도 접두어 + 인기 수식어 ──
+    has_intensity = any(p in q for p in INTENSITY_PREFIXES)
+    has_popularity = any(w in q for w in POPULARITY_WORDS)
+    has_ranking = has_intensity and has_popularity
+
+    # ── 3) 뉴스/커뮤니티 감지 ──
+    has_news = _has_news_intent(q)
+    has_community = _has_community_intent(q)
+
+    # 복합 의도: 분석 결과 + 뉴스/커뮤니티 (예: "키워드 분석을 토대로 관련 뉴스 알려줘")
+    if has_analysis and (has_news or has_community):
+        return "analysis+search"
+    if has_analysis:
+        return "analysis"
+
+    # 트렌드 보강 검색: 순위/인기도 수식어 감지
+    # "가장 유명한 국제정세 뉴스", "제일 핫한 이슈", "요즘 가장 인기있는 내용"
+    # 뉴스/커뮤니티 의도도 함께 전달 (fallback용)
+    if has_ranking:
+        if has_news and not has_community:
+            return "trend_enhanced:news"
+        elif has_community and not has_news:
+            return "trend_enhanced:community"
+        return "trend_enhanced"
 
     if has_news and not has_community:
         return "news"
     if has_community and not has_news:
         return "community"
     return "any"
+
+
+# ── 분석 결과 검색 (TrendAnalysisResult → LLM context) ──
+
+
+def _gen_keyword_phrases(qualifiers: list) -> list:
+    """수식어 × '키워드' 조합 자동 생성 (띄어쓰기 유/무 모두 포함)"""
+    phrases = []
+    for q in qualifiers:
+        phrases.append(f"{q} 키워드")
+        phrases.append(f"{q}키워드")
+    return phrases
+
+
+# hot_keywords / surge_keywords 감지용 수식어 (KEYWORD_QUALIFIERS · POPULARITY_WORDS 에서 파생)
+_HOT_KW_QUALIFIERS = [
+    "인기", "인기있는", "인기 있는", "핫", "핫한",
+    "뜨는", "뜨고 있는", "요즘", "최근", "트렌드", "상위",
+    "톱", "top", "hot", "popular",
+]
+_SURGE_KW_QUALIFIERS = ["급상승", "급상승하는", "급등", "급등하는"]
+
+# 쿼리 키워드 → analysis_type 매핑 (hot/surge 는 조합 자동 생성)
+_ANALYSIS_TYPE_KEYWORDS = {
+    "keywords": [
+        "키워드 분석", "키워드분석", "뉴스 키워드", "sns 키워드", "커뮤니티 키워드",
+        "많이 언급", "자주 언급", "자주 등장",
+    ],
+    "compare_platforms": [
+        "플랫폼 비교", "플랫폼비교", "뉴스 sns 비교", "뉴스 커뮤니티 비교",
+        "뉴스와 커뮤니티", "뉴스랑 커뮤니티",
+    ],
+    "hot_keywords": _gen_keyword_phrases(_HOT_KW_QUALIFIERS),
+    "surge_keywords": _gen_keyword_phrases(_SURGE_KW_QUALIFIERS) + ["surge"],
+    "time_lag": ["시간차 분석", "시간차분석"],
+    "trend_synchronization": ["트렌드 동기화", "동기화 분석"],
+    "hourly_trends": ["시간대별 분석", "시간대별 트렌드"],
+    "engagement_keywords": ["참여도 분석", "참여도 키워드", "engagement"],
+}
+
+# "키워드" + 수식어 조합 → analysis_type 매핑 (KEYWORD_QUALIFIERS 기반)
+_KEYWORD_QUALIFIER_TO_TYPE = {
+    "hot_keywords": [q for q in KEYWORD_QUALIFIERS if q not in ("급상승", "급등", "트렌드", "많이", "자주")],
+    "surge_keywords": ["급상승", "급등"],
+    "keywords": ["많이", "자주", "트렌드"],
+}
+
+
+def _detect_analysis_types(query_text: str) -> List[str]:
+    """쿼리에서 관련 analysis_type 목록을 추출한다."""
+    q = (query_text or "").strip().lower()
+    matched = []
+
+    # 1) 직접 매칭
+    for atype, keywords in _ANALYSIS_TYPE_KEYWORDS.items():
+        if any(kw in q for kw in keywords):
+            matched.append(atype)
+
+    # 2) "키워드" + 수식어 조합 매칭 (직접 매칭에서 못 잡은 경우)
+    if not matched and "키워드" in q:
+        for atype, qualifiers in _KEYWORD_QUALIFIER_TO_TYPE.items():
+            if any(qual in q for qual in qualifiers):
+                matched.append(atype)
+                break
+        # 수식어 없이 "키워드" 단독이면 hot_keywords로 기본 매핑
+        if not matched:
+            matched.append("hot_keywords")
+
+    return matched
+
+
+def _fetch_analysis_context(query_text: str, max_results: int = 3) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    TrendAnalysisResult에서 관련 분석 결과를 조회하여 LLM context 문자열로 변환.
+    """
+    import json
+    from analyzer.models import TrendAnalysisResult
+
+    matched_types = _detect_analysis_types(query_text)
+
+    # 특정 분석 유형이 감지되면 해당 유형만, 아니면 최신 결과 전체
+    if matched_types:
+        qs = TrendAnalysisResult.objects.filter(
+            analysis_type__in=matched_types,
+            status="success",
+        ).order_by("-created_at")[:max_results]
+    else:
+        qs = TrendAnalysisResult.objects.filter(
+            status="success",
+        ).order_by("-created_at")[:max_results]
+
+    if not qs.exists():
+        return "", []
+
+    blocks = []
+    sources = []
+
+    for result in qs:
+        # 분석 유형 한글 라벨
+        type_labels = {
+            "keywords": "키워드 분석",
+            "compare_platforms": "플랫폼 비교 분석",
+            "hot_keywords": "인기 키워드 분석",
+            "surge_keywords": "급상승 키워드 분석",
+            "time_lag": "시간차 분석",
+            "trend_synchronization": "트렌드 동기화 분석",
+            "hourly_trends": "시간대별 트렌드 분석",
+            "engagement_keywords": "참여도 키워드 분석",
+        }
+        label = type_labels.get(result.analysis_type, result.analysis_type)
+
+        # summary가 있으면 summary 우선, 없으면 result_data에서 핵심 추출
+        summary_data = result.summary or {}
+        result_data = result.result_data or {}
+
+        # 핵심 정보만 추출 (LLM context 크기 제한)
+        context_parts = [f"[분석결과] {label} | 기간: {result.days or '?'}일 | 날짜: {result.created_at.strftime('%Y-%m-%d %H:%M')}"]
+
+        # top_keywords 추출 (있으면)
+        for key in ["top_keywords", "news_surge_keywords", "sns_surge_keywords",
+                     "engagement_keywords", "viral_keywords", "synchronized_keywords",
+                     "common_keywords"]:
+            items = result_data.get(key, [])
+            if items and isinstance(items, list):
+                top_items = items[:10]
+                lines = []
+                for item in top_items:
+                    if isinstance(item, dict):
+                        kw = item.get("keyword", "")
+                        freq = item.get("frequency") or item.get("growth_ratio") or item.get("correlation") or ""
+                        if kw:
+                            lines.append(f"  - {kw}: {freq}")
+                if lines:
+                    context_parts.append(f"{key}:")
+                    context_parts.extend(lines)
+
+        # 통계 요약
+        stats = result_data.get("statistics") or result_data.get("summary") or summary_data
+        if stats and isinstance(stats, dict):
+            stats_lines = []
+            for k, v in list(stats.items())[:8]:
+                stats_lines.append(f"  - {k}: {v}")
+            if stats_lines:
+                context_parts.append("통계:")
+                context_parts.extend(stats_lines)
+
+        # news/sns 결과가 있는 compare_platforms 등
+        for platform_key in ["news", "sns"]:
+            platform_data = result_data.get(platform_key, {})
+            if isinstance(platform_data, dict):
+                top_kws = platform_data.get("top_keywords", [])[:5]
+                if top_kws:
+                    kw_strs = [f"{item.get('keyword', '')}({item.get('frequency', ''):.3f})" for item in top_kws if isinstance(item, dict)]
+                    if kw_strs:
+                        context_parts.append(f"{platform_key} 상위 키워드: {', '.join(kw_strs)}")
+
+        block_text = "\n".join(context_parts)
+        blocks.append(block_text)
+
+        sources.append({
+            "id": f"analysis:{result.id}",
+            "distance": 0.0,
+            "url": None,
+            "title": f"{label} ({result.created_at.strftime('%Y-%m-%d')})",
+            "type": "analysis",
+            "platform": result.platform,
+            "publisher": None,
+            "category": result.analysis_type,
+            "identifier": None,
+            "source_display": label,
+            "published_at": result.created_at.isoformat(),
+            "excerpt": block_text[:300],
+        })
+
+    context = "[EVIDENCE_QUALITY: adequate]\n[SOURCE_FILTER: analysis]\n\n" + "\n\n---\n\n".join(blocks)
+    return context, sources
+
+
+def _extract_keywords_from_analysis(query_text: str, max_keywords: int = 10) -> List[str]:
+    """
+    분석 결과(TrendAnalysisResult)에서 상위 키워드를 추출한다.
+    compound intent("analysis+search")에서 벡터 검색 쿼리를 만들기 위해 사용.
+    """
+    import json
+    from analyzer.models import TrendAnalysisResult
+
+    matched_types = _detect_analysis_types(query_text)
+
+    if matched_types:
+        qs = TrendAnalysisResult.objects.filter(
+            analysis_type__in=matched_types,
+            status="success",
+        ).order_by("-created_at")[:3]
+    else:
+        qs = TrendAnalysisResult.objects.filter(
+            status="success",
+        ).order_by("-created_at")[:3]
+
+    keywords = []
+    keyword_keys = [
+        "top_keywords", "news_surge_keywords", "sns_surge_keywords",
+        "engagement_keywords", "viral_keywords", "synchronized_keywords",
+        "common_keywords", "hot_keywords",
+    ]
+
+    for result in qs:
+        result_data = result.result_data or {}
+
+        for key in keyword_keys:
+            items = result_data.get(key, [])
+            if items and isinstance(items, list):
+                for item in items[:5]:
+                    if isinstance(item, dict):
+                        kw = (item.get("keyword") or "").strip()
+                        if kw and kw not in keywords:
+                            keywords.append(kw)
+
+        # news/sns 하위 구조에서도 추출
+        for platform_key in ["news", "sns"]:
+            platform_data = result_data.get(platform_key, {})
+            if isinstance(platform_data, dict):
+                for item in platform_data.get("top_keywords", [])[:5]:
+                    if isinstance(item, dict):
+                        kw = (item.get("keyword") or "").strip()
+                        if kw and kw not in keywords:
+                            keywords.append(kw)
+
+        if len(keywords) >= max_keywords:
+            break
+
+    return keywords[:max_keywords]
+
+
+def _extract_topic_from_query(query_text: str) -> List[str]:
+    """
+    쿼리에서 순위/인기도 수식어와 불용어를 제거한 뒤 주제 키워드를 추출.
+    예: "요즘 가장 유명한 국제정세 뉴스에 대해 알려줘" → ["국제정세"]
+        "가장 핫한 AI 소식" → ["AI"]
+        "제일 인기있는 정치 이슈" → ["정치"]
+        "요즘 가장 유명한 내용은 뭐야?" → [] (주제 없음)
+    """
+    q = (query_text or "").strip()
+    if not q:
+        return []
+
+    # 제거할 패턴: 공유 상수(INTENSITY_PREFIXES 등) + 일반 불용어
+    _noise_words = (
+        set(INTENSITY_PREFIXES)
+        | set(POPULARITY_WORDS)
+        | {f"{w}한" for w in POPULARITY_WORDS}   # "유명한", "핫한" 등
+        | {"인기있는", "인기 있는"}
+        | set(NEWS_INDICATORS)
+        | set(COMMUNITY_INDICATORS)
+        | {
+            # 시간 표현
+            "지금", "현재", "오늘",
+            # 일반 불용어
+            "내용", "이슈", "소식", "정보", "많이",
+            "대해", "대해서", "관련", "관련된", "관해", "관해서",
+            "알려줘", "알려주세요", "알려", "뭐야", "뭐", "뭔가", "어때",
+            # 조사·어미
+            "에", "은", "는", "이", "가", "을", "를", "의", "로", "으로",
+            "에서", "에게", "한테", "들", "좀", "해줘",
+        }
+    )
+
+    # 토큰 분리 후 노이즈 제거
+    tokens = q.split()
+    topics = []
+    for token in tokens:
+        # 조사 제거
+        cleaned = _strip_ko_particles(token)
+        if cleaned.lower() in _noise_words or len(cleaned) < 2:
+            continue
+        # 영문은 그대로
+        if re.match(r"^[a-zA-Z]+$", cleaned) and len(cleaned) >= 2:
+            topics.append(cleaned)
+            continue
+        # 한글 2글자 이상
+        if re.match(r"^[가-힣]{2,}$", cleaned):
+            topics.append(cleaned)
+
+    return topics[:3]
+
+
+def _get_trending_keywords_by_topic(
+    topic_words: List[str],
+    max_keywords: int = 10,
+    platform: Optional[str] = None,
+) -> Tuple[List[str], str]:
+    """
+    TrendAnalysisResult에서 topic_words와 관련된 상위 키워드를 추출.
+    topic_words가 빈 리스트면 전체 상위 키워드를 반환.
+
+    Args:
+        topic_words: 주제 키워드 리스트
+        max_keywords: 최대 키워드 수
+        platform: "news" 또는 "community" — 해당 플랫폼 키워드 우선 수집
+
+    Returns:
+        (키워드 리스트, 분석 결과 요약 텍스트)
+    """
+    from analyzer.models import TrendAnalysisResult
+
+    # 최신 성공 분석 결과 조회 (hot_keywords, keywords, surge_keywords 우선)
+    priority_types = ["hot_keywords", "keywords", "surge_keywords", "compare_platforms"]
+    qs = TrendAnalysisResult.objects.filter(
+        status="success",
+        analysis_type__in=priority_types,
+    ).order_by("-created_at")[:5]
+
+    if not qs.exists():
+        # fallback: 모든 타입에서
+        qs = TrendAnalysisResult.objects.filter(
+            status="success",
+        ).order_by("-created_at")[:5]
+
+    # 플랫폼별로 우선 수집할 키워드 키 분류
+    _news_keys = [
+        "top_keywords", "news_hot_keywords", "news_surge_keywords",
+    ]
+    _sns_keys = [
+        "top_keywords", "sns_hot_keywords", "sns_surge_keywords",
+        "engagement_keywords", "viral_keywords",
+    ]
+    _common_keys = [
+        "hot_keywords", "common_keywords", "synchronized_keywords",
+    ]
+    keyword_keys = list(set(
+        _news_keys + _sns_keys + _common_keys
+    ))
+
+    # 트렌드 키워드로 의미없는 범용 단어 필터
+    _trending_stopwords = {
+        "기간", "전달", "이후", "이상", "이하", "대비", "관련", "이번",
+        "현재", "최근", "지난", "올해", "내년", "작년", "오늘", "내일",
+        "대표", "위원", "관계자", "측", "사람", "경우", "부분", "상황",
+        "시작", "진행", "발표", "설명", "의견", "입장", "결과", "내용",
+        "문제", "방법", "시간", "이유", "정도", "사실", "가능", "예정",
+        "계획", "참여", "지원", "제공", "운영", "활동", "조사", "요청",
+    }
+
+    def _extract_freq_from_item(item: dict) -> float:
+        """키워드 항목에서 빈도/중요도 값 추출 (다양한 필드명 대응)"""
+        # 1) 직접 frequency 값 (keywords, hourly_trends, engagement)
+        freq = item.get("frequency")
+        if freq:
+            try:
+                return float(freq)
+            except (ValueError, TypeError):
+                pass
+
+        # 2) news_frequency + sns_frequency 합산 (common_keywords용)
+        nf = item.get("news_frequency", 0) or 0
+        sf = item.get("sns_frequency", 0) or 0
+        if nf or sf:
+            try:
+                return float(nf) + float(sf)
+            except (ValueError, TypeError):
+                pass
+
+        # 3) current_frequency (surge_keywords)
+        cf = item.get("current_frequency")
+        if cf:
+            try:
+                return float(cf)
+            except (ValueError, TypeError):
+                pass
+
+        # 4) growth_ratio (surge_keywords — 이전 대비 증가 배수)
+        gr = item.get("growth_ratio")
+        if gr:
+            try:
+                return float(gr)
+            except (ValueError, TypeError):
+                pass
+
+        # 5) correlation (trend_synchronization)
+        corr = item.get("correlation")
+        if corr:
+            try:
+                return float(corr)
+            except (ValueError, TypeError):
+                pass
+
+        # 6) avg_engagement_score (engagement_keywords)
+        eng = item.get("avg_engagement_score")
+        if eng:
+            try:
+                return float(eng)
+            except (ValueError, TypeError):
+                pass
+
+        return 0.0
+
+    def _collect_from_list(items, analysis_type, out):
+        """리스트에서 (keyword, freq, type) 튜플 추출"""
+        if not items or not isinstance(items, list):
+            return
+        for item in items:
+            if isinstance(item, dict):
+                kw = (item.get("keyword") or "").strip()
+                if kw:
+                    out.append((kw, _extract_freq_from_item(item), analysis_type))
+
+    def _is_valid_trending_kw(kw: str) -> bool:
+        """범용 불용어를 트렌드 키워드에서 제외"""
+        return kw not in _trending_stopwords and len(kw) >= 2
+
+    # 플랫폼별로 분리 수집
+    primary_items = []   # 요청 플랫폼 키워드 (우선)
+    secondary_items = [] # 반대 플랫폼 키워드 (보충)
+    common_items = []    # 공통/교차 키워드
+
+    for result in qs:
+        result_data = result.result_data or {}
+
+        # 최상위 + nested result 두 레벨 모두 탐색
+        search_layers = [result_data]
+        nested_result = result_data.get("result", {})
+        if isinstance(nested_result, dict):
+            search_layers.append(nested_result)
+
+        for layer in search_layers:
+            # 뉴스 전용 키워드
+            for key in _news_keys:
+                items_list = layer.get(key, [])
+                if items_list and isinstance(items_list, list):
+                    target = primary_items if platform == "news" else secondary_items
+                    _collect_from_list(items_list, result.analysis_type, target)
+
+            # SNS 전용 키워드
+            for key in _sns_keys:
+                if key == "top_keywords":
+                    continue  # news와 중복되므로 하위 구조에서 처리
+                items_list = layer.get(key, [])
+                if items_list and isinstance(items_list, list):
+                    target = primary_items if platform == "community" else secondary_items
+                    _collect_from_list(items_list, result.analysis_type, target)
+
+            # 공통 키워드 (양쪽 공통)
+            for key in _common_keys:
+                items_list = layer.get(key, [])
+                if items_list and isinstance(items_list, list):
+                    _collect_from_list(items_list, result.analysis_type, common_items)
+
+        # news/sns 하위 구조 (keywords 타입: news.top_keywords, sns.top_keywords)
+        for platform_key in ["news", "sns"]:
+            platform_data = result_data.get(platform_key, {})
+            if isinstance(platform_data, dict):
+                sub_items = platform_data.get("top_keywords", [])
+                if sub_items:
+                    if platform == "news" and platform_key == "news":
+                        _collect_from_list(sub_items, result.analysis_type, primary_items)
+                    elif platform == "community" and platform_key == "sns":
+                        _collect_from_list(sub_items, result.analysis_type, primary_items)
+                    elif platform_key == "news":
+                        target = secondary_items if platform == "community" else primary_items
+                        _collect_from_list(sub_items, result.analysis_type, target)
+                    else:  # sns
+                        target = secondary_items if platform == "news" else primary_items
+                        _collect_from_list(sub_items, result.analysis_type, target)
+
+    # 플랫폼 지정 시: primary(해당 플랫폼)만 사용, 부족하면 common → secondary 순서로 보충
+    # 플랫폼 미지정 시: 전부 합산 (기존 동작)
+    if platform in ("news", "community") and primary_items:
+        all_kw_items = primary_items + common_items
+        # primary + common으로 충분하면 secondary(반대 플랫폼) 미사용
+        if len(set(kw for kw, _, _ in all_kw_items)) < max_keywords:
+            all_kw_items.extend(secondary_items)
+    else:
+        all_kw_items = primary_items + common_items + secondary_items
+
+    if not all_kw_items:
+        return [], ""
+
+    # 불용어 필터
+    all_kw_items = [(kw, freq, at) for kw, freq, at in all_kw_items if _is_valid_trending_kw(kw)]
+
+    if not all_kw_items:
+        return [], ""
+
+    # 주제 필터: topic_words가 있으면 관련 키워드만 필터
+    topic_matched = False
+    if topic_words:
+        # 복합어를 2글자 단위로 분해하여 부분 매칭 확대
+        # 예: "국제정세" → ["국제정세", "국제", "정세"]
+        topic_lower = []
+        for t in topic_words:
+            t_low = t.lower()
+            topic_lower.append(t_low)
+            # 3글자 이상 한글 복합어는 2글자 단위로도 분해
+            if len(t_low) >= 3 and re.match(r"^[가-힣]+$", t_low):
+                for i in range(len(t_low) - 1):
+                    chunk = t_low[i:i + 2]
+                    if chunk not in topic_lower:
+                        topic_lower.append(chunk)
+
+        filtered = []
+        for kw, freq, atype in all_kw_items:
+            kw_lower = kw.lower()
+            if any(t in kw_lower or kw_lower in t for t in topic_lower):
+                filtered.append((kw, freq, atype))
+
+        if filtered:
+            all_kw_items = filtered
+            topic_matched = True
+
+    # 중복 제거 + 동일 키워드는 더 높은 빈도를 선택
+    kw_best: Dict[str, Tuple[float, str]] = {}  # kw → (best_freq, atype)
+    for kw, freq, atype in all_kw_items:
+        try:
+            freq_val = float(freq) if freq else 0
+        except (ValueError, TypeError):
+            freq_val = 0
+        if kw not in kw_best or freq_val > kw_best[kw][0]:
+            kw_best[kw] = (freq_val, atype)
+
+    unique_items = [(kw, fv, at) for kw, (fv, at) in kw_best.items()]
+
+    unique_items.sort(key=lambda x: x[1], reverse=True)
+    top_items = unique_items[:max_keywords]
+
+    keywords = [item[0] for item in top_items]
+
+    # 주제 관련 키워드를 못 찾았으면 주제 단어 자체를 키워드로 사용
+    if topic_words and not topic_matched:
+        keywords = topic_words + keywords[:max_keywords - len(topic_words)]
+
+    # 요약 텍스트 (LLM context에 포함)
+    if topic_matched:
+        summary_lines = [f"[분석결과] '{', '.join(topic_words)}' 관련 트렌드 키워드 (중요도순):"]
+    else:
+        summary_lines = ["[분석결과] 트렌드 상위 키워드 (중요도순):"]
+    for kw, freq, atype in top_items:
+        if freq >= 1.0:
+            # growth_ratio 등 배수 값
+            freq_str = f"{freq:.1f}x"
+        elif freq > 0:
+            # 상대 빈도 → 퍼센트 표시
+            freq_str = f"{freq * 100:.2f}%"
+        else:
+            freq_str = "-"
+        summary_lines.append(f"  - {kw} ({freq_str})")
+
+    summary_text = "\n".join(summary_lines)
+    return keywords, summary_text
 
 
 def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
@@ -1148,24 +1744,22 @@ class OpenAIResponsesLLM:
         final_model = (
             model
             or getattr(settings, "OPENAI_MODEL", None)
-            or os.getenv("OPENAI_MODEL", "gpt-5")
+            or os.getenv("OPENAI_MODEL", "gpt-4o")
         )
 
-        # ✅ 기본값(없으면 settings/.env 사용) - 답변이 중간에 끊기지 않도록 충분한 토큰 확보
-        # gpt-5는 reasoning 토큰이 output_tokens에서 차감되므로 충분히 높게 설정
-        # 예: reasoning 500 + 실제 출력 500 = 최소 1000 필요
+        # ✅ 기본값(없으면 settings/.env 사용)
+        # 한국어 3~5문장 기준: 토큰 소비가 영어 대비 2~3배 → 800이 적정
         default_max = int(
             os.getenv(
                 "OPENAI_MAX_OUTPUT_TOKENS",
-                getattr(settings, "OPENAI_MAX_OUTPUT_TOKENS", 1500),
+                getattr(settings, "OPENAI_MAX_OUTPUT_TOKENS", 800),
             )
         )
         if max_output_tokens is None or int(max_output_tokens) <= 0:
             max_output_tokens = default_max
 
         # ✅ 비용 절감을 위한 상한선 설정
-        # gpt-5 reasoning 고려하여 2000으로 상향
-        MAX_HARD_CAP = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS_CAP", 2000))
+        MAX_HARD_CAP = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS_CAP", 1200))
         if max_output_tokens > MAX_HARD_CAP:
             max_output_tokens = MAX_HARD_CAP
 
@@ -1177,75 +1771,38 @@ class OpenAIResponsesLLM:
         # (여기서는 안전하게 gpt-5*이면 temperature를 payload에서 제외)
         supports_temperature = not str(final_model).startswith("gpt-5")
 
-        system_lines = []
-        system_lines.append("당신은 뉴스/커뮤니티 트렌드 분석 Q&A 어시스턴트입니다.")
-        system_lines.append("답변은 한국어로, 자연스럽고 친근한 대화체로 작성하세요.")
-        system_lines.append(
-            "CONTEXT에는 [뉴스]와 [커뮤니티] 두 종류의 자료가 포함될 수 있습니다. "
-            "각 자료 앞에 [뉴스] 또는 [커뮤니티] 태그가 붙어 있습니다."
+        # ── System Prompt ──
+        # 설계 원칙: LlamaIndex(사전지식 금지) + LangChain(문장 수 제한) + Anthropic(context 상단 배치)
+        system_prompt = (
+            "당신은 뉴스·커뮤니티 트렌드 Q&A 어시스턴트입니다.\n"
+            "아래 규칙을 반드시 따르세요.\n\n"
+            "1. CONTEXT에 제공된 자료만 사용하여 답변하세요. 사전 지식이나 추측을 섞지 마세요.\n"
+            "2. [뉴스] 자료는 사실로, [커뮤니티] 자료는 '온라인 반응'으로, [분석결과] 자료는 데이터 기반 분석으로 인용하세요.\n"
+            "3. 답변은 반드시 3~5문장 이내로 작성하세요. 절대로 5문장을 초과하지 마세요. 자료가 많더라도 핵심 트렌드 1~2가지로 요약하세요.\n"
+            "4. 근거가 부족하면 '관련 자료가 부족하지만'이라고 전제하세요. 없는 내용을 지어내지 마세요.\n"
+            "5. 번호 매기기(1. 2. 3.)나 항목 나열을 하지 마세요. 기사 제목을 나열하지 말고, 가장 핵심적인 이슈를 하나의 흐름으로 자연스럽게 풀어 설명하세요.\n"
+            "6. 답변은 한국어 존댓말(~합니다, ~있습니다, ~되었습니다)로 작성하세요. 반말(~이다, ~했다, ~있다)은 절대 사용하지 마세요.\n"
+            "7. 완전한 문장으로 끝내세요. 추가 질문이나 제안은 붙이지 마세요."
         )
-        system_lines.append(
-            "[뉴스] 자료는 언론 보도이므로 사실 기반 정보로 인용할 수 있습니다. "
-            "[커뮤니티] 자료는 온라인 커뮤니티 게시글이므로 '온라인에서는 ~라는 반응이 있다', "
-            "'커뮤니티에서는 ~라는 의견이 나온다' 등 여론/반응으로만 인용하세요."
-        )
-        system_lines.append(
-            "절대로 커뮤니티 게시글의 내용을 뉴스 보도처럼 사실로 단정하지 마세요."
-        )
-        system_lines.append(
-            "뉴스와 커뮤니티 정보가 상충할 경우, 뉴스를 사실로 우선 제시하고 "
-            "커뮤니티는 '일부에서는 다른 반응도 있다'는 정도로만 언급하세요."
-        )
-        system_lines.append(
-            "CONTEXT에 [EVIDENCE_QUALITY: low]가 표시되어 있으면, "
-            "'수집된 자료가 제한적이어서' 또는 '관련 자료가 부족하지만'이라는 전제를 반드시 붙이세요."
-        )
-        system_lines.append("CONTEXT에 없는 사실을 만들어내지 마세요.")
-        system_lines.append(
-            "각 정보의 출처 유형([뉴스] 또는 [커뮤니티])을 답변 내에서 자연스럽게 구분해 주세요."
-        )
-        system_lines.append(
-            "답변은 1~3문단으로 핵심만 간결하게 작성하세요. 불필요하게 늘리지 마세요."
-        )
-        system_lines.append(
-            "기사 제목을 나열하지 말고, 이슈를 자연스럽게 풀어 설명하세요."
-        )
-        system_lines.append(
-            "답변은 완전한 문장으로 끝내고, 추가 질문이나 제안은 붙이지 마세요."
-        )
-
         if instructions:
-            system_lines.append(f"[추가 지시사항]\n{instructions}")
+            system_prompt += f"\n\n[추가 지시사항]\n{instructions}"
 
-        system_prompt = "\n".join(system_lines)
-
-        # CONTEXT 길이 확인 및 로깅
+        # ── User Prompt ──
+        # Anthropic 방식: 긴 CONTEXT를 상단에, 질문을 하단에 배치 (성능 향상)
         context_length = len(context) if context else 0
         logger.debug(
             f"[LLM 프롬프트] 질문 길이={len(query_text)}, CONTEXT 길이={context_length}"
         )
-
-        # CONTEXT가 너무 짧으면 경고
         if context_length < 50:
             logger.warning(f"[LLM 프롬프트] CONTEXT가 너무 짧음 ({context_length}자)")
 
         user_prompt = (
-            f"[질문]\n{query_text}\n\n"
             f"[CONTEXT]\n{context}\n\n"
-            f"[지시사항]\n"
-            f"핵심: CONTEXT만을 근거로 답변하세요. CONTEXT에 없는 사실을 만들어내지 마세요.\n\n"
-            f"출처 구분:\n"
-            f"- [뉴스] 자료 → 사실 정보로 직접 인용 가능\n"
-            f"- [커뮤니티] 자료 → '온라인에서는 ~반응', '커뮤니티에서는 ~의견' 형태로만 인용\n\n"
-            f"근거 부족 시:\n"
-            f"- CONTEXT가 질문과 전혀 관련 없거나 [EVIDENCE_QUALITY: low]이면 "
-            f"'현재 수집된 데이터에서 관련 근거가 적어요.'라고 전제하고 가능한 범위에서만 답변\n\n"
-            f"형식: 완전한 문장으로 마무리하세요. 추가 질문이나 제안은 붙이지 마세요.\n"
+            f"---\n\n"
+            f"위 CONTEXT만을 근거로 다음 질문에 답변하세요.\n"
+            f"[질문] {query_text}"
         )
-
-        # 프롬프트 길이 확인
-        prompt_length = len(user_prompt)
-        logger.debug(f"[LLM 프롬프트] 전체 프롬프트 길이={prompt_length}")
+        logger.debug(f"[LLM 프롬프트] 전체 프롬프트 길이={len(user_prompt)}")
 
         payload: Dict[str, Any] = {
             "model": final_model,
@@ -1417,7 +1974,7 @@ class OpenAIResponsesLLM:
         final_model = (
             model
             or getattr(settings, "OPENAI_MODEL", None)
-            or os.getenv("OPENAI_MODEL", "gpt-5")
+            or os.getenv("OPENAI_MODEL", "gpt-4o")
         )
 
         system_prompt = (
@@ -1553,7 +2110,7 @@ class OpenAIResponsesLLM:
         final_model = (
             model
             or getattr(settings, "OPENAI_MODEL", None)
-            or os.getenv("OPENAI_MODEL", "gpt-5")
+            or os.getenv("OPENAI_MODEL", "gpt-4o")
         )
 
         system_prompt = (
@@ -1703,7 +2260,7 @@ class RAGService:
         logger.debug("[RAGService.query] 캐시 확인 중...")
 
         # ✅ 1) 최종 옵션 먼저 확정 (캐시 키 + LLM 호출 양쪽에서 공유)
-        final_model = model or _get_setting("OPENAI_MODEL", "gpt-5")
+        final_model = model or _get_setting("OPENAI_MODEL", "gpt-4o")
         final_temperature = (
             temperature
             if temperature is not None
@@ -1782,6 +2339,393 @@ class RAGService:
                     query_text=query_text, model=final_model
                 )
                 logger.info(f"[IntentRouter] {intent_info}")
+
+        # ========================================
+        # 분석 결과 의도 감지 → DB 직접 조회 (벡터 검색 불필요)
+        # ========================================
+        source_intent = _detect_source_intent(query_text)
+        logger.info(f"[RAG 검색] source_intent={source_intent}")
+
+        if source_intent == "analysis":
+            _t_analysis = time.time()
+            analysis_context, analysis_sources = _fetch_analysis_context(query_text)
+
+            if analysis_context:
+                logger.info(
+                    f"[RAG 분석] 분석 결과 {len(analysis_sources)}건 조회 ({time.time() - _t_analysis:.2f}s)"
+                )
+
+                # LLM에 분석 결과 context 전달
+                llm_result = self.llm.answer(
+                    query_text=query_text,
+                    context=analysis_context,
+                    model=final_model,
+                    temperature=final_temperature,
+                    max_output_tokens=final_max_tokens,
+                    reasoning_effort=reasoning_effort,
+                    instructions=instructions,
+                )
+                answer = (
+                    llm_result.text
+                    if isinstance(llm_result, LLMResult)
+                    else str(llm_result)
+                )
+
+                # QueryHistory 저장
+                try:
+                    history = QueryHistory.objects.create(
+                        query_text=query_text,
+                        answer_text=answer,
+                        sources=analysis_sources,
+                    )
+                    history_id = history.id
+                except Exception as e:
+                    logger.error(f"[RAG] QueryHistory 저장 실패: {e}")
+                    history_id = None
+
+                logger.info(
+                    f"[RAG 타이밍] 전체 파이프라인(분석): {time.time() - _t_pipeline:.2f}s"
+                )
+                return {
+                    "answer": answer,
+                    "sources": analysis_sources,
+                    "query": query_text,
+                    "history_id": history_id,
+                }
+            else:
+                logger.info("[RAG 분석] 분석 결과 없음, 일반 검색으로 fallback")
+
+        # ========================================
+        # 복합 의도: 분석 결과 + 뉴스/커뮤니티 검색 결합
+        # ========================================
+        if source_intent == "analysis+search":
+            _t_compound = time.time()
+            analysis_context, analysis_sources = _fetch_analysis_context(query_text)
+            analysis_keywords = _extract_keywords_from_analysis(query_text)
+
+            if analysis_keywords:
+                # 분석 결과에서 추출한 키워드로 벡터 검색
+                search_query_for_compound = " ".join(analysis_keywords[:5])
+                logger.info(
+                    f"[RAG 복합] 분석 키워드로 벡터 검색: {analysis_keywords[:5]}"
+                )
+
+                retrieval_k = max(int(top_k) * 6, int(top_k) + 20)
+                compound_candidates = self.vector_db.similarity_search(
+                    search_query_for_compound,
+                    top_k=retrieval_k,
+                    distance_threshold=1.5,
+                    fetch_multiplier=3,
+                    balance_types=False,
+                )
+
+                # 키워드 검색도 병행
+                kw_candidates = self.vector_db.keyword_search(
+                    query_text=search_query_for_compound,
+                    keywords=analysis_keywords[:5],
+                    top_k=retrieval_k,
+                )
+
+                # 병합 (중복 제거)
+                seen = set()
+                merged = []
+                for r in kw_candidates + compound_candidates:
+                    if r.id not in seen:
+                        seen.add(r.id)
+                        merged.append(r)
+
+                # 뉴스/커뮤니티 필터 (사용자가 뉴스 또는 커뮤니티를 명시한 경우)
+                want_news = _has_news_intent(query_text or "")
+                want_community = _has_community_intent(query_text or "")
+
+                if want_news and not want_community:
+                    typed = [r for r in merged if _infer_type(r.id, r.metadata) == "news"]
+                    if typed:
+                        merged = typed
+                elif want_community and not want_news:
+                    typed = [r for r in merged if _infer_type(r.id, r.metadata) == "social"]
+                    if typed:
+                        merged = typed
+
+                # 상위 N개만 사용
+                merged = merged[:int(top_k)]
+
+                if merged:
+                    # 뉴스/커뮤니티 context 생성
+                    search_context, search_sources = _build_context_and_sources(
+                        merged,
+                        max_doc_chars=700,
+                        evidence_quality="adequate",
+                        source_intent="any",
+                    )
+
+                    # 분석 결과 + 뉴스/커뮤니티 context 결합
+                    combined_context = ""
+                    if analysis_context:
+                        combined_context += analysis_context + "\n\n---\n\n"
+                    combined_context += search_context
+
+                    combined_sources = analysis_sources + search_sources
+
+                    llm_result = self.llm.answer(
+                        query_text=query_text,
+                        context=combined_context,
+                        model=final_model,
+                        temperature=final_temperature,
+                        max_output_tokens=final_max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        instructions=instructions,
+                    )
+                    answer = (
+                        llm_result.text
+                        if isinstance(llm_result, LLMResult)
+                        else str(llm_result)
+                    )
+
+                    try:
+                        history = QueryHistory.objects.create(
+                            query_text=query_text,
+                            answer_text=answer,
+                            sources=combined_sources,
+                        )
+                        history_id = history.id
+                    except Exception as e:
+                        logger.error(f"[RAG] QueryHistory 저장 실패: {e}")
+                        history_id = None
+
+                    logger.info(
+                        f"[RAG 타이밍] 복합 의도 파이프라인: {time.time() - _t_compound:.2f}s "
+                        f"(분석 {len(analysis_sources)}건 + 검색 {len(search_sources)}건)"
+                    )
+                    return {
+                        "answer": answer,
+                        "sources": combined_sources,
+                        "query": query_text,
+                        "history_id": history_id,
+                    }
+
+            # 분석 키워드 추출 실패 시 분석 결과만으로 응답 (fallback)
+            if analysis_context:
+                llm_result = self.llm.answer(
+                    query_text=query_text,
+                    context=analysis_context,
+                    model=final_model,
+                    temperature=final_temperature,
+                    max_output_tokens=final_max_tokens,
+                    reasoning_effort=reasoning_effort,
+                    instructions=instructions,
+                )
+                answer = (
+                    llm_result.text
+                    if isinstance(llm_result, LLMResult)
+                    else str(llm_result)
+                )
+                try:
+                    history = QueryHistory.objects.create(
+                        query_text=query_text, answer_text=answer, sources=analysis_sources,
+                    )
+                    history_id = history.id
+                except Exception as e:
+                    logger.error(f"[RAG] QueryHistory 저장 실패: {e}")
+                    history_id = None
+
+                return {
+                    "answer": answer,
+                    "sources": analysis_sources,
+                    "query": query_text,
+                    "history_id": history_id,
+                }
+
+            # 분석 결과도 없으면 일반 검색으로 fallback
+            logger.info("[RAG 복합] 분석 결과 없음, 일반 검색으로 fallback")
+            source_intent = "any"
+
+        # ========================================
+        # 트렌드 보강 검색: "가장 유명한", "제일 핫한" 등
+        # 분석 결과에서 상위 키워드를 추출 → 벡터 검색 쿼리 보강
+        # ========================================
+        _trend_fallback_intent = "any"
+        if source_intent.startswith("trend_enhanced"):
+            # "trend_enhanced:news" → fallback은 "news"로
+            if ":" in source_intent:
+                _trend_fallback_intent = source_intent.split(":")[1]
+            _t_trend = time.time()
+
+            # 쿼리에서 주제 키워드 추출 (예: "국제정세", "정치", "AI")
+            topic_words = _extract_topic_from_query(query_text)
+            logger.info(f"[RAG 트렌드] 주제 추출: {topic_words}")
+
+            # 분석 결과에서 주제 관련 상위 키워드 가져오기
+            # 플랫폼 정보 전달: "news" → 뉴스 키워드 우선, "community" → SNS 우선
+            _kw_platform = None
+            if _trend_fallback_intent == "news":
+                _kw_platform = "news"
+            elif _trend_fallback_intent == "community":
+                _kw_platform = "community"
+            trending_keywords, trend_summary = _get_trending_keywords_by_topic(
+                topic_words, max_keywords=10, platform=_kw_platform,
+            )
+            logger.info(f"[RAG 트렌드] 추출된 트렌드 키워드: {trending_keywords[:5]}")
+
+            if trending_keywords:
+                # 트렌드 키워드로 벡터 검색 (주제 단어를 앞에 배치하여 시맨틱 검색 방향 설정)
+                trend_search_query = " ".join(trending_keywords[:5])
+                if topic_words:
+                    trend_search_query = " ".join(topic_words) + " " + trend_search_query
+
+                retrieval_k = max(int(top_k) * 6, int(top_k) + 20)
+                trend_candidates = self.vector_db.similarity_search(
+                    trend_search_query,
+                    top_k=retrieval_k,
+                    distance_threshold=1.5,
+                    fetch_multiplier=3,
+                    balance_types=False,
+                )
+
+                # 키워드 검색도 병행 (주제 단어도 키워드에 포함)
+                search_keywords = list(trending_keywords[:5])
+                for tw in topic_words:
+                    if tw not in search_keywords:
+                        search_keywords.insert(0, tw)
+                trend_kw_candidates = self.vector_db.keyword_search(
+                    query_text=trend_search_query,
+                    keywords=search_keywords[:7],
+                    top_k=retrieval_k,
+                )
+
+                # 병합 (중복 제거, 키워드 매칭 우선)
+                seen = set()
+                merged = []
+                for r in trend_kw_candidates + trend_candidates:
+                    if r.id not in seen:
+                        seen.add(r.id)
+                        merged.append(r)
+
+                # 뉴스/커뮤니티 필터 (intent에서 이미 감지된 정보 활용)
+                want_news = _trend_fallback_intent == "news"
+                want_community = _trend_fallback_intent == "community"
+                if not want_news and not want_community:
+                    # fallback에 정보 없으면 쿼리에서 직접 판별
+                    want_news = _has_news_intent(query_text or "")
+                    want_community = _has_community_intent(query_text or "")
+
+                if want_news and not want_community:
+                    typed = [r for r in merged if _infer_type(r.id, r.metadata) == "news"]
+                    if typed:
+                        merged = typed
+                elif want_community and not want_news:
+                    typed = [r for r in merged if _infer_type(r.id, r.metadata) == "social"]
+                    if typed:
+                        merged = typed
+
+                # 키워드 overlap + 거리 기반 재랭킹 (일반 파이프라인과 동일한 품질 필터)
+                merged = rank_results_generic(
+                    query_text=query_text,
+                    results=merged,
+                    final_k=int(top_k) * 2,
+                    min_keyword_hits=1,
+                )
+
+                # 거리 게이트: 너무 먼 결과 제거
+                hard_dist = float(_get_setting("RAG_HARD_DISTANCE_THRESHOLD", 1.05))
+                gated = [r for r in merged if r.distance <= hard_dist]
+                if gated:
+                    merged = gated
+
+                # 뉴스/커뮤니티 균형 선택 (명시적 필터가 없는 경우만)
+                final_k = int(top_k)
+                if not want_news and not want_community and len(merged) > final_k:
+                    news_pool = [r for r in merged if _infer_type(r.id, r.metadata) == "news"]
+                    social_pool = [r for r in merged if _infer_type(r.id, r.metadata) == "social"]
+
+                    if news_pool and social_pool:
+                        # 뉴스 70%, 소셜 30% 목표 (뉴스 최소 2개 보장)
+                        news_target = max(2, int(final_k * 0.7))
+                        social_target = final_k - news_target
+
+                        # 실제 가용 수에 맞춰 조정
+                        news_take = min(len(news_pool), news_target)
+                        social_take = min(len(social_pool), final_k - news_take)
+                        # 뉴스가 부족하면 소셜로, 소셜이 부족하면 뉴스로 보충
+                        news_take = min(len(news_pool), final_k - social_take)
+
+                        merged = news_pool[:news_take] + social_pool[:social_take]
+                        # 재랭킹 순서 유지 (거리순)
+                        merged.sort(key=lambda r: r.distance)
+                    else:
+                        merged = merged[:final_k]
+                else:
+                    merged = merged[:final_k]
+
+                if merged:
+                    search_context, search_sources = _build_context_and_sources(
+                        merged,
+                        max_doc_chars=700,
+                        evidence_quality="adequate",
+                        source_intent="any",
+                    )
+
+                    # 트렌드 요약 + 뉴스/커뮤니티 context 결합
+                    combined_context = trend_summary + "\n\n---\n\n" + search_context
+
+                    trend_source = {
+                        "id": "trend:summary",
+                        "distance": 0.0,
+                        "url": None,
+                        "title": "트렌드 분석 상위 키워드",
+                        "type": "analysis",
+                        "platform": None,
+                        "publisher": None,
+                        "category": "trend_enhanced",
+                        "identifier": None,
+                        "source_display": "트렌드 분석",
+                        "published_at": None,
+                        "excerpt": trend_summary[:300],
+                    }
+                    combined_sources = [trend_source] + search_sources
+
+                    llm_result = self.llm.answer(
+                        query_text=query_text,
+                        context=combined_context,
+                        model=final_model,
+                        temperature=final_temperature,
+                        max_output_tokens=final_max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        instructions=instructions,
+                    )
+                    answer = (
+                        llm_result.text
+                        if isinstance(llm_result, LLMResult)
+                        else str(llm_result)
+                    )
+
+                    try:
+                        history = QueryHistory.objects.create(
+                            query_text=query_text,
+                            answer_text=answer,
+                            sources=combined_sources,
+                        )
+                        history_id = history.id
+                    except Exception as e:
+                        logger.error(f"[RAG] QueryHistory 저장 실패: {e}")
+                        history_id = None
+
+                    logger.info(
+                        f"[RAG 타이밍] 트렌드 보강 파이프라인: {time.time() - _t_trend:.2f}s "
+                        f"(트렌드 키워드: {trending_keywords[:3]}, 검색 결과: {len(search_sources)}건)"
+                    )
+                    return {
+                        "answer": answer,
+                        "sources": combined_sources,
+                        "query": query_text,
+                        "history_id": history_id,
+                    }
+
+            # 트렌드 키워드로 적절한 결과를 못 찾음 → 원래 의도로 fallback
+            logger.info(
+                f"[RAG 트렌드] 트렌드 보강 실패, fallback intent={_trend_fallback_intent}"
+            )
+            source_intent = _trend_fallback_intent
 
         # ========================================
         # LLM 기반 쿼리 재구성 (대화형 → 검색용)
@@ -1946,10 +2890,27 @@ class RAGService:
                 )
 
         # ========================================
-        # STEP A: 소스 의도 판별 (LLM 호출 없이 키워드 기반)
+        # STEP A: 의도 기반 소스 타입 사전 필터링 (랭킹 전에 적용)
         # ========================================
-        source_intent = _detect_source_intent(query_text)
-        logger.info(f"[RAG 검색] source_intent={source_intent}")
+        # source_intent는 상단에서 이미 감지됨
+        if source_intent == "news":
+            typed = [r for r in candidates if _infer_type(r.id, r.metadata) == "news"]
+            if typed:
+                logger.info(f"[RAG 필터] news intent → 후보군 {len(candidates)}개에서 뉴스 {len(typed)}개로 사전 필터")
+                candidates = typed
+            else:
+                logger.warning(
+                    f"[RAG 필터] news intent이지만 뉴스 후보 없음, {len(candidates)}개 전체 후보 유지"
+                )
+        elif source_intent == "community":
+            typed = [r for r in candidates if _infer_type(r.id, r.metadata) == "social"]
+            if typed:
+                logger.info(f"[RAG 필터] community intent → 후보군 {len(candidates)}개에서 소셜 {len(typed)}개로 사전 필터")
+                candidates = typed
+            else:
+                logger.warning(
+                    f"[RAG 필터] community intent이지만 소셜 후보 없음, {len(candidates)}개 전체 후보 유지"
+                )
 
         # ========================================
         # STEP B: 키워드 포함(overlap) 우선으로 재랭킹 (over-fetch for filtering headroom)
@@ -1966,32 +2927,9 @@ class RAGService:
         )
 
         # ========================================
-        # STEP C: 의도 기반 소스 타입 필터링 (타입만 필터, 거리는 Step D에서 처리)
+        # STEP C: 거리 게이트 (하드 → 소프트 → fallback 단계적 적용)
         # ========================================
         hard_distance = float(_get_setting("RAG_HARD_DISTANCE_THRESHOLD", 1.05))
-
-        if source_intent == "news":
-            typed = [r for r in results if _infer_type(r.id, r.metadata) == "news"]
-            if typed:
-                results = typed
-                logger.info(f"[RAG 필터] news intent → {len(typed)}개 뉴스 선택")
-            else:
-                logger.warning(
-                    f"[RAG 필터] news intent이지만 뉴스 결과 없음, {len(results)}개 전체 결과로 대체"
-                )
-        elif source_intent == "community":
-            typed = [r for r in results if _infer_type(r.id, r.metadata) == "social"]
-            if typed:
-                results = typed
-                logger.info(f"[RAG 필터] community intent → {len(typed)}개 소셜 선택")
-            else:
-                logger.warning(
-                    f"[RAG 필터] community intent이지만 소셜 결과 없음, {len(results)}개 전체 결과로 대체"
-                )
-
-        # ========================================
-        # STEP D: 거리 게이트 (하드 → 소프트 → fallback 단계적 적용)
-        # ========================================
         force_low_quality = False
         gated = [r for r in results if r.distance <= hard_distance]
         if len(gated) >= max(int(top_k) // 2, 1):
@@ -2084,6 +3022,7 @@ class RAGService:
             insufficient_msg = {
                 "news": f"'{query_text}'에 관련된 뉴스 기사를 찾을 수 없습니다. 다른 키워드로 검색해보세요.",
                 "community": f"'{query_text}'에 관련된 커뮤니티 게시글을 찾을 수 없습니다. 다른 키워드로 검색해보세요.",
+                "analysis": f"'{query_text}'에 관련된 분석 결과를 찾을 수 없습니다. 먼저 분석을 실행해주세요.",
                 "any": f"'{query_text}'에 대해 충분히 관련성 높은 정보를 찾을 수 없습니다. 다른 키워드로 검색해보세요.",
             }
             logger.warning(
