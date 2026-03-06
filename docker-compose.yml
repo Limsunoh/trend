@@ -1,22 +1,4 @@
 services:
-  db:
-    image: postgres:15-alpine
-    env_file:
-      - .env
-    environment:
-      POSTGRES_DB: trend_db
-      POSTGRES_USER: team_user
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U team_user -d trend_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7-alpine
     ports:
@@ -28,7 +10,7 @@ services:
       retries: 5
 
   web:
-    build: .
+    image: limsunoh/trend:latest
     command: >
       sh -c "python manage.py migrate --no-input &&
              python manage.py collectstatic --no-input --clear 2>/dev/null || true &&
@@ -37,17 +19,14 @@ services:
       - "8000:8000"
     volumes:
       - ./fixtures:/app/fixtures
+      - ./certs:/app/certs
       - chroma_data:/app/chroma_db
     env_file:
       - .env
     environment:
-      DB_HOST: db
-      DB_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -58,43 +37,37 @@ services:
       start_period: 90s
 
   celery_worker:
-    build: .
+    image: limsunoh/trend:latest
     command: celery -A trend_analyzer worker -l info -E -Q celery,embedding --pool=solo
     volumes:
+      - ./certs:/app/certs
       - chroma_data:/app/chroma_db
     env_file:
       - .env
     environment:
-      DB_HOST: db
-      DB_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       web:
         condition: service_healthy
 
   celery_beat:
-    build: .
+    image: limsunoh/trend:latest
     command: celery -A trend_analyzer beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - ./certs:/app/certs
     env_file:
       - .env
     environment:
-      DB_HOST: db
-      DB_PORT: "5432"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       web:
         condition: service_healthy
 
 volumes:
-  postgres_data:
   chroma_data:
