@@ -46,6 +46,15 @@ DEBUG = os.getenv("DEBUG", "True") == "True"
 
 ALLOWED_HOSTS = ["*"]
 
+CSRF_TRUSTED_ORIGINS = [
+    "http://3.37.203.226:8000/",
+    "http://3.37.203.226/",
+    "http://localhost:8000/",
+    "http://127.0.0.1:8000/",
+    "https://3.37.203.226:8000/",
+    "https://3.37.203.226/",
+]
+
 # 보안 헤더 (SecurityMiddleware / XFrameOptionsMiddleware 가 적용)
 SECURE_CONTENT_TYPE_NOSNIFF = True  # X-Content-Type-Options: nosniff
 SECURE_BROWSER_XSS_FILTER = True  # X-XSS-Protection: 1; mode=block
