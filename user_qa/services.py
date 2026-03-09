@@ -734,10 +734,10 @@ def _detect_source_intent(query_text: str) -> str:
     if has_analysis:
         return "analysis"
 
-    # 트렌드 보강 검색: 순위/인기도 수식어 감지
-    # "가장 유명한 국제정세 뉴스", "제일 핫한 이슈", "요즘 가장 인기있는 내용"
-    # 뉴스/커뮤니티 의도도 함께 전달 (fallback용)
-    if has_ranking:
+    # 트렌드 보강 검색: 인기 수식어 감지
+    # Case 1: 강도 접두어 + 인기 수식어 ("가장 유명한 ~", "제일 핫한 ~")
+    # Case 2: 인기 수식어 단독 ("핫한 내용", "유명한 소식", "인기있는 이슈")
+    if has_ranking or has_popularity:
         if has_news and not has_community:
             return "trend_enhanced:news"
         elif has_community and not has_news:
