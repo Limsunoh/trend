@@ -13,7 +13,6 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from django.conf import settings
 from django.db.models import Max
-from sentence_transformers import SentenceTransformer
 
 from common.redis_services import RAGCacheService
 from data_collector.models import NewsArticle, SocialMediaPost
@@ -58,6 +57,8 @@ class VectorDBService:
             "EMBEDDING_MODEL",
             "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         )
+        from sentence_transformers import SentenceTransformer
+
         self.embedder = SentenceTransformer(model_name)
 
         self.client = chromadb.PersistentClient(
