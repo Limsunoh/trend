@@ -651,6 +651,12 @@ POPULARITY_WORDS = [
     "화제", "주목", "난리", "대박",
 ]
 
+# 탐색적 트렌드 신호 단어: 특정 주제 없는 탐색적 쿼리에서 trend_enhanced 라우팅
+TREND_SIGNAL_WORDS = [
+    "트렌드", "이슈", "재밌", "재미있", "흥미", "볼만",
+    "큰", "컸", "많은", "궁금", "요즘", "대충",
+]
+
 # 키워드 수식어: "키워드" 앞에 붙어서 분석 의도를 나타내는 단어
 KEYWORD_QUALIFIERS = [
     "핫", "인기", "급상승", "급등", "뜨는", "뜨고",
@@ -685,7 +691,58 @@ _ANALYSIS_DIRECT_PHRASES = [
     "참여도 분석", "참여도 키워드",
     "많이 언급", "자주 언급", "자주 등장",
     "surge", "engagement",
+    # 자연어 동의어 (플랫폼 속도/비교)
+    "반영이 빨라", "반영이 느려", "반영 속도", "먼저 반영",
+    "빠른 플랫폼", "느린 플랫폼", "플랫폼별 비교",
 ]
+
+# 시스템 메타 질문 감지 패턴 ("기준이 뭐야?", "어떻게 계산해?" 등)
+_META_QUESTION_PATTERNS = [
+    "기준이 뭐", "기준이 뭔", "기준이 무엇", "어떤 기준",
+    "어떻게 계산", "어떻게 분석", "어떻게 선정", "어떻게 판단",
+    "무슨 뜻", "무슨 의미",
+    "알고리즘", "방법론",
+    "급상승 기준", "인기 기준", "트렌드 기준",
+    "어떤 방식", "어떤 방법",
+]
+
+# 메타 질문에 대한 시스템 설명 (LLM context로 전달)
+_META_EXPLANATIONS = {
+    "급상승": (
+        "급상승 키워드는 최근 수집된 뉴스와 SNS 데이터에서 "
+        "일정 기간(기본 7일) 동안 언급 빈도가 급격히 증가한 키워드를 의미합니다. "
+        "이전 기간 대비 출현 빈도의 증가율(surge ratio)을 계산하고, "
+        "서지 임계값(기본 2.0배)을 초과하면 급상승 키워드로 선정됩니다. "
+        "뉴스와 SNS 각각에서 별도로 급상승 키워드를 추출합니다."
+    ),
+    "인기": (
+        "인기 키워드는 뉴스 기사와 커뮤니티 게시글에서 "
+        "가장 높은 출현 빈도(frequency)를 기록한 키워드입니다. "
+        "뉴스 상위 키워드, SNS 상위 키워드, 양쪽 공통 키워드로 구분하여 분석합니다."
+    ),
+    "플랫폼": (
+        "플랫폼 비교 분석은 동일 키워드가 뉴스와 SNS에서 "
+        "얼마나 다르게 언급되는지 비교합니다. "
+        "공통 키워드, 뉴스 고유 키워드, SNS 고유 키워드로 구분하여 "
+        "각 플랫폼의 트렌드 특성을 파악합니다."
+    ),
+    "시간차": (
+        "시간차 분석은 특정 이슈가 뉴스와 SNS 중 "
+        "어느 플랫폼에서 먼저 등장했는지 시간 순서를 분석합니다. "
+        "동기화 분석은 두 플랫폼 간 키워드 출현 시점의 상관관계를 측정합니다."
+    ),
+    "참여도": (
+        "참여도 키워드 분석은 커뮤니티에서 댓글, 추천 등 "
+        "사용자 참여가 높은 게시글의 키워드를 식별합니다. "
+        "평균 참여 점수(avg_engagement_score)를 기준으로 순위를 매깁니다."
+    ),
+    "트렌드": (
+        "트렌드 분석은 뉴스 기사와 SNS/커뮤니티 게시글을 자동 수집하고, "
+        "키워드 빈도 분석, 급상승 탐지, 플랫폼 비교, 시간차 분석, "
+        "시간대별 트렌드, 참여도 분석을 수행합니다. "
+        "분석 결과는 최신 수집 데이터를 기반으로 주기적으로 자동 갱신됩니다."
+    ),
+}
 
 
 def _has_news_intent(q: str) -> bool:
@@ -700,10 +757,52 @@ def _has_community_intent(q: str) -> bool:
     return any(kw in q_l for kw in COMMUNITY_INDICATORS)
 
 
+def _apply_negation(q: str):
+    """
+    부정/배제 패턴을 감지하여 뉴스/커뮤니티 의도를 override.
+    "뉴스 없이", "뉴스 빼고" → 뉴스 OFF
+    "SNS만", "커뮤니티만" → 커뮤니티 ON + 뉴스 OFF
+
+    Returns: (news_override, community_override)
+        True=강제 ON, False=강제 OFF, None=기본 감지 유지
+    """
+    q_l = q.lower()
+    news_ovr = None
+    comm_ovr = None
+
+    # "X 없이 / 빼고 / 제외 / 말고 / 없는 / 빼줘" → 해당 출처 OFF
+    for src_words, target in [
+        (["뉴스", "기사"], "news"),
+        (["sns", "커뮤니티", "소셜"], "community"),
+    ]:
+        for sw in src_words:
+            if re.search(
+                rf"{sw}\s*(?:는\s*)?(?:없이|없는|빼고|빼줘|제외|말고|안\s)",
+                q_l,
+            ):
+                if target == "news":
+                    news_ovr = False
+                else:
+                    comm_ovr = False
+
+    # "X만" → 해당 출처만 ON
+    for sw, target in [
+        ("뉴스만", "news"), ("기사만", "news"),
+        ("sns만", "community"), ("커뮤니티만", "community"), ("소셜만", "community"),
+    ]:
+        if sw in q_l:
+            if target == "news":
+                news_ovr, comm_ovr = True, False
+            else:
+                comm_ovr, news_ovr = True, False
+
+    return news_ovr, comm_ovr
+
+
 def _detect_source_intent(query_text: str) -> str:
     """
     사용자가 뉴스/커뮤니티/분석결과 중 어떤 출처를 원하는지 키워드 기반으로 판별.
-    LLM 호출 없이 순수 키워드 매칭 + 조합 매칭.
+    LLM 호출 없이 순수 키워드 매칭 + 조합 매칭 + 부정 표현 처리.
 
     Returns: "news", "community", "analysis", "analysis+search",
              "trend_enhanced", or "any"
@@ -720,6 +819,11 @@ def _detect_source_intent(query_text: str) -> str:
         or (has_keyword_word and any(w in q for w in POPULARITY_WORDS))
     )
 
+    # 토큰 분리 매칭: "플랫폼" + "비교"/"분석"/"차이" 각각 존재 시 분석 의도
+    if not has_analysis and "플랫폼" in q:
+        if any(w in q for w in ["비교", "분석", "차이"]):
+            has_analysis = True
+
     # ── 2) 순위/인기도 감지: 강도 접두어 + 인기 수식어 ──
     has_intensity = any(p in q for p in INTENSITY_PREFIXES)
     has_popularity = any(w in q for w in POPULARITY_WORDS)
@@ -728,6 +832,19 @@ def _detect_source_intent(query_text: str) -> str:
     # ── 3) 뉴스/커뮤니티 감지 ──
     has_news = _has_news_intent(q)
     has_community = _has_community_intent(q)
+
+    # ── 3.5) 부정/배제 패턴 적용 ("뉴스 없이", "SNS만" 등) ──
+    news_ovr, comm_ovr = _apply_negation(q)
+    if news_ovr is not None:
+        has_news = news_ovr
+    if comm_ovr is not None:
+        has_community = comm_ovr
+    # 한쪽만 명시적 OFF이고 다른 쪽 언급 없으면 → 반대 출처 ON 추론
+    # 예: "뉴스 없는 걸로 보여줘" → 뉴스 OFF, 커뮤니티 ON
+    if news_ovr is False and comm_ovr is None and not has_community:
+        has_community = True
+    if comm_ovr is False and news_ovr is None and not has_news:
+        has_news = True
 
     # 복합 의도: 분석 결과 + 뉴스/커뮤니티 (예: "키워드 분석을 토대로 관련 뉴스 알려줘")
     if has_analysis and (has_news or has_community):
@@ -744,6 +861,20 @@ def _detect_source_intent(query_text: str) -> str:
         elif has_community and not has_news:
             return "trend_enhanced:community"
         return "trend_enhanced"
+
+    # Case 3: 트렌드 신호 단어 + 탐색적 쿼리 (특정 주제 없음)
+    # "재밌는 이슈 있어?", "대충 요즘 트렌드만 알려줘", "뭐가 제일 컸어?"
+    # 단, 부정/배제 패턴으로 출처가 명시적으로 지정된 경우는 건너뜀
+    has_negation_applied = news_ovr is not None or comm_ovr is not None
+    has_trend_signal = any(w in q for w in TREND_SIGNAL_WORDS)
+    if has_trend_signal and not has_negation_applied:
+        topic_words = _extract_topic_from_query(query_text)
+        if not topic_words:
+            if has_news and not has_community:
+                return "trend_enhanced:news"
+            elif has_community and not has_news:
+                return "trend_enhanced:community"
+            return "trend_enhanced"
 
     if has_news and not has_community:
         return "news"
@@ -781,10 +912,15 @@ _ANALYSIS_TYPE_KEYWORDS = {
     "compare_platforms": [
         "플랫폼 비교", "플랫폼비교", "뉴스 sns 비교", "뉴스 커뮤니티 비교",
         "뉴스와 커뮤니티", "뉴스랑 커뮤니티",
+        "플랫폼별 비교", "플랫폼별 키워드",
     ],
     "hot_keywords": _gen_keyword_phrases(_HOT_KW_QUALIFIERS),
     "surge_keywords": _gen_keyword_phrases(_SURGE_KW_QUALIFIERS) + ["surge"],
-    "time_lag": ["시간차 분석", "시간차분석"],
+    "time_lag": [
+        "시간차 분석", "시간차분석",
+        "반영이 빨라", "반영이 느려", "반영 속도", "먼저 반영",
+        "빠른 플랫폼", "느린 플랫폼",
+    ],
     "trend_synchronization": ["트렌드 동기화", "동기화 분석"],
     "hourly_trends": ["시간대별 분석", "시간대별 트렌드"],
     "engagement_keywords": ["참여도 분석", "참여도 키워드", "engagement"],
@@ -999,8 +1135,10 @@ def _extract_topic_from_query(query_text: str) -> List[str]:
     _noise_words = (
         set(INTENSITY_PREFIXES)
         | set(POPULARITY_WORDS)
+        | set(TREND_SIGNAL_WORDS)
         | {f"{w}한" for w in POPULARITY_WORDS}   # "유명한", "핫한" 등
-        | {"인기있는", "인기 있는"}
+        | {f"{w}는" for w in TREND_SIGNAL_WORDS}  # "재밌는", "흥미로운" 등
+        | {"인기있는", "인기 있는", "재밌는", "재미있는", "흥미로운"}
         | set(NEWS_INDICATORS)
         | set(COMMUNITY_INDICATORS)
         | {
@@ -1010,9 +1148,13 @@ def _extract_topic_from_query(query_text: str) -> List[str]:
             "내용", "이슈", "소식", "정보", "많이",
             "대해", "대해서", "관련", "관련된", "관해", "관해서",
             "알려줘", "알려주세요", "알려", "뭐야", "뭐", "뭔가", "어때",
-            # 조사·어미
+            "뭐가", "뭘", "뭐를", "뭐든", "어디", "어디서", "언제", "얼마나",
+            "컸어", "많지", "있지", "없지", "됐어", "했어",
+            # 조사·어미·기능어
             "에", "은", "는", "이", "가", "을", "를", "의", "로", "으로",
             "에서", "에게", "한테", "들", "좀", "해줘",
+            "없이", "있는", "없는", "있어", "없어", "있는지", "없는지",
+            "있나", "없나", "있을", "없을", "있게", "없게",
         }
     )
 
@@ -1422,7 +1564,8 @@ def _build_context_and_sources(
             }
         )
 
-    header_lines = [f"[EVIDENCE_QUALITY: {evidence_quality}]"]
+    # evidence_quality 헤더: LLM 답변에 영향 주지 않는 내부 태그로만 사용
+    header_lines = []
     if source_intent != "any":
         header_lines.append(f"[SOURCE_FILTER: {source_intent}]")
     header = "\n".join(header_lines)
@@ -1776,12 +1919,12 @@ class OpenAIResponsesLLM:
         system_prompt = (
             "당신은 뉴스·커뮤니티 트렌드 Q&A 어시스턴트입니다.\n"
             "아래 규칙을 반드시 따르세요.\n\n"
-            "1. CONTEXT에 제공된 자료만 사용하여 답변하세요. 사전 지식이나 추측을 섞지 마세요.\n"
+            "1. CONTEXT에 제공된 자료만 사용하여 답변하세요. CONTEXT에 없는 내용은 답변하지 마세요. 사전 지식이나 추측을 섞지 마세요.\n"
             "2. [뉴스] 자료는 사실로, [커뮤니티] 자료는 '온라인 반응'으로, [분석결과] 자료는 데이터 기반 분석으로 인용하세요.\n"
-            "3. 답변은 반드시 3~5문장 이내로 작성하세요. 절대로 5문장을 초과하지 마세요. 자료가 많더라도 핵심 트렌드 1~2가지로 요약하세요.\n"
-            "4. 근거가 부족하면 '관련 자료가 부족하지만'이라고 전제하세요. 없는 내용을 지어내지 마세요.\n"
-            "5. 번호 매기기(1. 2. 3.)나 항목 나열을 하지 마세요. 기사 제목을 나열하지 말고, 가장 핵심적인 이슈를 하나의 흐름으로 자연스럽게 풀어 설명하세요.\n"
-            "6. 답변은 한국어 존댓말(~합니다, ~있습니다, ~되었습니다)로 작성하세요. 반말(~이다, ~했다, ~있다)은 절대 사용하지 마세요.\n"
+            "3. 답변은 3~5문장 이내로 작성하세요. 핵심 트렌드 1~2가지로 요약하세요.\n"
+            "4. '관련 자료가 부족하지만', '관련 자료에 따르면', '검색 결과에 따르면' 같은 메타 표현을 사용하지 마세요. 자연스럽게 답변하세요.\n"
+            "5. 번호 매기기(1. 2. 3.)나 항목 나열을 하지 마세요. 핵심 이슈를 하나의 흐름으로 자연스럽게 풀어 설명하세요.\n"
+            "6. 한국어 존댓말(~합니다, ~있습니다)로 작성하세요.\n"
             "7. 완전한 문장으로 끝내세요. 추가 질문이나 제안은 붙이지 마세요."
         )
         if instructions:
@@ -2346,6 +2489,60 @@ class RAGService:
         source_intent = _detect_source_intent(query_text)
         logger.info(f"[RAG 검색] source_intent={source_intent}")
 
+        # ========================================
+        # 메타 질문 핸들러 (시스템 기준/방법론에 대한 질문)
+        # 분석 의도가 동시에 감지된 경우, 분석 파이프라인을 우선 (메타 건너뜀)
+        # ========================================
+        q_lower_for_meta = (query_text or "").lower()
+        is_meta_question = (
+            any(p in q_lower_for_meta for p in _META_QUESTION_PATTERNS)
+            and source_intent not in ("analysis", "analysis+search")
+        )
+        if is_meta_question:
+            # 가장 관련성 높은 설명 선택
+            meta_parts = []
+            for key, explanation in _META_EXPLANATIONS.items():
+                if key in q_lower_for_meta:
+                    meta_parts.append(explanation)
+            if not meta_parts:
+                meta_parts.append(_META_EXPLANATIONS["트렌드"])
+
+            meta_context = "[시스템 설명]\n" + "\n\n".join(meta_parts)
+            logger.info(f"[RAG 메타] 시스템 설명 질문 감지, 키: {[k for k in _META_EXPLANATIONS if k in q_lower_for_meta]}")
+
+            llm_result = self.llm.answer(
+                query_text=query_text,
+                context=meta_context,
+                model=final_model,
+                temperature=final_temperature,
+                max_output_tokens=final_max_tokens,
+                reasoning_effort=reasoning_effort,
+                instructions=instructions,
+            )
+            answer = (
+                llm_result.text
+                if isinstance(llm_result, LLMResult)
+                else str(llm_result)
+            )
+
+            try:
+                history = QueryHistory.objects.create(
+                    query_text=query_text,
+                    answer_text=answer,
+                    sources=[{"type": "system_meta", "title": "시스템 설명"}],
+                )
+                history_id = history.id
+            except Exception as e:
+                logger.error(f"[RAG] QueryHistory 저장 실패: {e}")
+                history_id = None
+
+            return {
+                "answer": answer,
+                "sources": [{"type": "analysis", "title": "시스템 설명"}],
+                "query": query_text,
+                "history_id": history_id,
+            }
+
         if source_intent == "analysis":
             _t_analysis = time.time()
             analysis_context, analysis_sources = _fetch_analysis_context(query_text)
@@ -2437,6 +2634,12 @@ class RAGService:
                 # 뉴스/커뮤니티 필터 (사용자가 뉴스 또는 커뮤니티를 명시한 경우)
                 want_news = _has_news_intent(query_text or "")
                 want_community = _has_community_intent(query_text or "")
+                # 부정/배제 패턴 적용
+                n_ovr, c_ovr = _apply_negation(query_text or "")
+                if n_ovr is not None:
+                    want_news = n_ovr
+                if c_ovr is not None:
+                    want_community = c_ovr
 
                 if want_news and not want_community:
                     typed = [r for r in merged if _infer_type(r.id, r.metadata) == "news"]
@@ -2608,6 +2811,12 @@ class RAGService:
                     # fallback에 정보 없으면 쿼리에서 직접 판별
                     want_news = _has_news_intent(query_text or "")
                     want_community = _has_community_intent(query_text or "")
+                    # 부정/배제 패턴 적용
+                    n_ovr, c_ovr = _apply_negation(query_text or "")
+                    if n_ovr is not None:
+                        want_news = n_ovr
+                    if c_ovr is not None:
+                        want_community = c_ovr
 
                 if want_news and not want_community:
                     typed = [r for r in merged if _infer_type(r.id, r.metadata) == "news"]
@@ -2639,18 +2848,13 @@ class RAGService:
                     social_pool = [r for r in merged if _infer_type(r.id, r.metadata) == "social"]
 
                     if news_pool and social_pool:
-                        # 뉴스 70%, 소셜 30% 목표 (뉴스 최소 2개 보장)
+                        # 뉴스 70% 목표, 부족하면 상대 타입으로 보충
                         news_target = max(2, int(final_k * 0.7))
-                        social_target = final_k - news_target
-
-                        # 실제 가용 수에 맞춰 조정
                         news_take = min(len(news_pool), news_target)
                         social_take = min(len(social_pool), final_k - news_take)
-                        # 뉴스가 부족하면 소셜로, 소셜이 부족하면 뉴스로 보충
-                        news_take = min(len(news_pool), final_k - social_take)
-
+                        if news_take + social_take < final_k:
+                            news_take = min(len(news_pool), final_k - social_take)
                         merged = news_pool[:news_take] + social_pool[:social_take]
-                        # 재랭킹 순서 유지 (거리순)
                         merged.sort(key=lambda r: r.distance)
                     else:
                         merged = merged[:final_k]
@@ -2987,7 +3191,27 @@ class RAGService:
             return (-score, r.distance)
 
         results.sort(key=_sort_key)
-        results = results[: int(top_k)]
+
+        # 뉴스/커뮤니티 균형 선택 (source_intent=="any"일 때 70:30)
+        final_k = int(top_k)
+        if source_intent == "any" and len(results) > final_k:
+            news_pool = [r for r in results if _infer_type(r.id, r.metadata) == "news"]
+            social_pool = [r for r in results if _infer_type(r.id, r.metadata) == "social"]
+
+            if news_pool and social_pool:
+                # 뉴스 70% 목표, 부족하면 상대 타입으로 보충
+                news_target = max(2, int(final_k * 0.7))
+                news_take = min(len(news_pool), news_target)
+                social_take = min(len(social_pool), final_k - news_take)
+                # 소셜도 부족하면 남은 슬롯을 뉴스로 보충
+                if news_take + social_take < final_k:
+                    news_take = min(len(news_pool), final_k - social_take)
+                results = news_pool[:news_take] + social_pool[:social_take]
+                results.sort(key=_sort_key)
+            else:
+                results = results[:final_k]
+        else:
+            results = results[:final_k]
 
         # ========================================
         # STEP E-2: 결과 다양성 보장 (같은 출처 편중 방지)
