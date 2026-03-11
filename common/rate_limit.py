@@ -3,7 +3,10 @@
 
 기사/포스트/분석 결과 조회 API에 IP 기준 분당 요청 제한을 적용합니다.
 Redis 기반 RateLimitService를 사용합니다.
+DISABLE_READ_API_THROTTLE=1 이면 throttle 비적용 (부하 테스트용).
 """
+
+import os
 
 from rest_framework.throttling import BaseThrottle
 
@@ -42,6 +45,13 @@ class ReadAPIThrottle(BaseThrottle):
         return f"api_read:{ip}"
 
     def allow_request(self, request, view):
+        if os.getenv("DISABLE_READ_API_THROTTLE", "").strip() in (
+            "1",
+            "true",
+            "True",
+            "yes",
+        ):
+            return True
         key = self.get_cache_key(request, view)
         service = self._get_service()
         result = service.check_rate_limit(
