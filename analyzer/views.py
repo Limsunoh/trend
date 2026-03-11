@@ -10,10 +10,22 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from rest_framework import viewsets
+from rest_framework.pagination import PageNumberPagination
 
 from analyzer.models import TrendAnalysisResult
-from analyzer.serializers import TrendAnalysisResultSerializer
+from analyzer.serializers import (
+    TrendAnalysisResultListSerializer,
+    TrendAnalysisResultSerializer,
+)
 from common.rate_limit import ReadAPIThrottle
+
+
+class AnalysisResultPagination(PageNumberPagination):
+    """분석 결과 목록 페이지네이션 — 응답 크기·부하 감소용"""
+
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 def _make_aware(value: Optional[datetime]) -> Optional[datetime]:
@@ -53,10 +65,15 @@ _LIST_ANALYSIS_PARAMETERS = [
 class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
     """트렌드 분석 결과 ViewSet (전체 목록 조회용)"""
 
-    queryset = TrendAnalysisResult.objects.all()[:1000]
+    queryset = TrendAnalysisResult.objects.all()
     serializer_class = TrendAnalysisResultSerializer
     throttle_classes = [ReadAPIThrottle]
-    pagination_class = None
+    pagination_class = AnalysisResultPagination
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return TrendAnalysisResultListSerializer
+        return TrendAnalysisResultSerializer
 
     def get_queryset(self):
         queryset = TrendAnalysisResult.objects.all()
@@ -109,11 +126,16 @@ class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
 class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
     """분석 결과 ViewSet 기본 클래스"""
 
-    queryset = TrendAnalysisResult.objects.all()[:100]
+    queryset = TrendAnalysisResult.objects.all()
     serializer_class = TrendAnalysisResultSerializer
     throttle_classes = [ReadAPIThrottle]
     analysis_type = None
-    pagination_class = None
+    pagination_class = AnalysisResultPagination
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return TrendAnalysisResultListSerializer
+        return TrendAnalysisResultSerializer
 
     def _parse_url_params(self):
         platform = self.request.query_params.get("platform", None)

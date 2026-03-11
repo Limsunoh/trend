@@ -3,8 +3,16 @@ from rest_framework import serializers
 from .models import TrendAnalysisResult
 
 
+class TrendAnalysisResultListSerializer(serializers.ModelSerializer):
+    """목록 조회용 경량 Serializer — result_data/summary/parameters 제외"""
+
+    class Meta:
+        model = TrendAnalysisResult
+        fields = ["id", "analysis_type", "platform", "days", "status", "created_at"]
+
+
 class TrendAnalysisResultSerializer(serializers.ModelSerializer):
-    """트렌드 분석 결과 Serializer"""
+    """트렌드 분석 결과 Serializer (상세 조회용, 전체 필드)"""
 
     class Meta:
         model = TrendAnalysisResult
