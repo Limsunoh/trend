@@ -21,7 +21,8 @@ services:
     volumes:
       - ./fixtures:/app/fixtures
       - ./certs:/app/certs
-      - ./logs:/app/logs
+      # 호스트 로그 경로. EC2에서 로그가 안 보이면 .env에 TREND_LOGS_DIR=/home/ubuntu/trend 설정 후 재기동
+      - ${TREND_LOGS_DIR:-.}/logs:/app/logs
       - chroma_data:/app/chroma_db
     env_file:
       - .env
