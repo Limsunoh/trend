@@ -16,6 +16,11 @@
 # 이미지 빌드 + 전체 스택 기동
 docker compose up -d --build
 
+# 이미지 캐시 없이(하드 리빌드) 전체 스택 기동
+docker compose build --no-cache
+docker compose up -d
+
+
 # 로그 확인
 docker compose logs -f
 
