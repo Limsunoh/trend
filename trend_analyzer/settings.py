@@ -223,6 +223,9 @@ CACHES = {
     }
 }
 
+# 목록 API Redis 캐시 TTL (초).
+LIST_API_CACHE_TTL = int(os.getenv("LIST_API_CACHE_TTL", "900"))
+
 # Celery Configuration
 CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 CELERY_RESULT_BACKEND = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"

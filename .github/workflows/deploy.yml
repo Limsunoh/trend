@@ -40,9 +40,9 @@ jobs:
           host: 3.37.203.226
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          strict: false
           script: |
             cd ~/trend || exit 1
+            git fetch origin && git reset --hard origin/main
             docker compose down
             docker system prune -af
             docker pull limsunoh/trend:latest

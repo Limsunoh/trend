@@ -15,7 +15,7 @@ services:
       sh -c "python manage.py migrate --no-input &&
              python manage.py collectstatic --no-input --clear 2>/dev/null || true &&
              mkdir -p /app/logs &&
-             exec gunicorn --bind 0.0.0.0:8000 --workers 4 --threads 2 --timeout 120 --access-logfile /app/logs/access.log --error-logfile /app/logs/error.log trend_analyzer.wsgi:application"
+             exec gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 --access-logfile /app/logs/access.log --error-logfile /app/logs/error.log trend_analyzer.wsgi:application"
     ports:
       - "8000:8000"
     volumes:

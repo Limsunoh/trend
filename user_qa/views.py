@@ -3,6 +3,8 @@ import logging
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 
+from common.list_cache import get_cached_list_response, set_cached_list_response
+
 from .models import QueryHistory
 from .serializers import (
     QueryHistorySerializer,
@@ -16,11 +18,20 @@ logger = logging.getLogger(__name__)
 
 class QueryHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    질의응답 히스토리 조회
+    질의응답 히스토리 조회. 목록은 Redis 캐시로 응답 가속.
     """
 
     queryset = QueryHistory.objects.all().order_by("-id")
     serializer_class = QueryHistorySerializer
+
+    def list(self, request, *args, **kwargs):
+        # 캐시 hit 시 DB/직렬화 없이 바로 반환 (목록 API 부하 감소)
+        cached = get_cached_list_response(request, "user_qa:history")
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        set_cached_list_response(request, "user_qa:history", response.data)
+        return response
 
 
 class RAGQueryViewSet(viewsets.ViewSet):
