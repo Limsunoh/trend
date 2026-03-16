@@ -69,6 +69,9 @@ reports/
 
 nul
 
+# Docker local override
+docker-compose.override.yml
+
 # Vector DB / Chroma
 chroma_db/
 vector_db/

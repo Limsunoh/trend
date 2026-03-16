@@ -1457,6 +1457,8 @@ def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
         return 2
     if any(kw in q for kw in ["이번주", "이번 주", "금주"]):
         return 7
+    if any(kw in q for kw in ["지난주", "저번주", "저번 주", "지난 주"]):
+        return 14
 
     # 중간 시간 신호
     if any(
@@ -1478,6 +1480,8 @@ def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
         return 14
     if any(kw in q for kw in ["이번달", "이번 달", "금월"]):
         return 30
+    if any(kw in q for kw in ["지난달", "저번달", "저번 달", "지난 달"]):
+        return 60
 
     # intent_info의 time_focus 활용
     if intent_time_focus == "recent":
@@ -1564,10 +1568,14 @@ def _build_context_and_sources(
             }
         )
 
-    # evidence_quality 헤더: LLM 답변에 영향 주지 않는 내부 태그로만 사용
     header_lines = []
     if source_intent != "any":
         header_lines.append(f"[SOURCE_FILTER: {source_intent}]")
+    if evidence_quality == "low":
+        header_lines.append(
+            "[EVIDENCE_QUALITY: LOW] 검색된 자료의 관련성이 낮을 수 있습니다. "
+            "자료 내용을 바탕으로 답변하되, 관련 자료가 전혀 없다면 솔직하게 알려주세요."
+        )
     header = "\n".join(header_lines)
 
     context_body = "\n\n---\n\n".join(blocks)
@@ -1919,13 +1927,18 @@ class OpenAIResponsesLLM:
         system_prompt = (
             "당신은 뉴스·커뮤니티 트렌드 Q&A 어시스턴트입니다.\n"
             "아래 규칙을 반드시 따르세요.\n\n"
-            "1. CONTEXT에 제공된 자료만 사용하여 답변하세요. CONTEXT에 없는 내용은 답변하지 마세요. 사전 지식이나 추측을 섞지 마세요.\n"
+            "1. CONTEXT에 제공된 자료만 사용하여 답변하세요. CONTEXT에 없는 내용은 답변하지 마세요. "
+            "사전 지식이나 추측을 섞지 마세요.\n"
             "2. [뉴스] 자료는 사실로, [커뮤니티] 자료는 '온라인 반응'으로, [분석결과] 자료는 데이터 기반 분석으로 인용하세요.\n"
             "3. 답변은 3~5문장 이내로 작성하세요. 핵심 트렌드 1~2가지로 요약하세요.\n"
-            "4. '관련 자료가 부족하지만', '관련 자료에 따르면', '검색 결과에 따르면' 같은 메타 표현을 사용하지 마세요. 자연스럽게 답변하세요.\n"
+            "4. 다음 표현은 절대 사용하지 마세요: '관련 자료가 부족하지만', '자료가 부족하지만', "
+            "'관련 자료에 따르면', '검색 결과에 따르면'. "
+            "CONTEXT 자료를 바탕으로 자연스럽게 답변하세요.\n"
             "5. 번호 매기기(1. 2. 3.)나 항목 나열을 하지 마세요. 핵심 이슈를 하나의 흐름으로 자연스럽게 풀어 설명하세요.\n"
             "6. 한국어 존댓말(~합니다, ~있습니다)로 작성하세요.\n"
-            "7. 완전한 문장으로 끝내세요. 추가 질문이나 제안은 붙이지 마세요."
+            "7. 완전한 문장으로 끝내세요. 추가 질문이나 제안은 붙이지 마세요.\n"
+            "8. 뉴스와 커뮤니티 간 비교·대조를 요청받았을 때, CONTEXT에 양쪽 자료가 모두 있으면 "
+            "각 출처의 관점 차이를 설명하세요. 한쪽 자료만 있으면 비교가 불가능하다고 답변하세요."
         )
         if instructions:
             system_prompt += f"\n\n[추가 지시사항]\n{instructions}"
@@ -2835,6 +2848,43 @@ class RAGService:
                     min_keyword_hits=1,
                 )
 
+                # 시간 필터 (일반 파이프라인과 동일)
+                _trend_time_scope = _detect_time_scope(
+                    query_text, intent_time_focus=intent_info.get("time_focus", ""),
+                )
+                if _trend_time_scope > 0:
+                    from datetime import datetime, timedelta, timezone
+
+                    _trend_cutoff = datetime.now(timezone.utc) - timedelta(days=_trend_time_scope)
+                    _trend_recent = []
+                    for r in merged:
+                        pa = (r.metadata or {}).get("published_at", "")
+                        if pa:
+                            try:
+                                doc_dt = datetime.fromisoformat(pa)
+                                if doc_dt.tzinfo is None:
+                                    doc_dt = doc_dt.replace(tzinfo=timezone.utc)
+                                if doc_dt >= _trend_cutoff:
+                                    _trend_recent.append(r)
+                            except (ValueError, TypeError):
+                                pass
+                    if _trend_recent:
+                        logger.info(
+                            f"[RAG 트렌드 시간필터] {_trend_time_scope}일 이내: "
+                            f"{len(_trend_recent)}개 (전체 {len(merged)}개에서 필터)"
+                        )
+                        merged = _trend_recent
+                    else:
+                        # 시간 필터 결과가 없으면 시간순 정렬 유지
+                        merged.sort(
+                            key=lambda r: (r.metadata or {}).get("published_at", ""),
+                            reverse=True,
+                        )
+                        logger.info(
+                            f"[RAG 트렌드 시간필터] {_trend_time_scope}일 이내 결과 없음, "
+                            f"전체 {len(merged)}개를 시간순 정렬"
+                        )
+
                 # 거리 게이트: 너무 먼 결과 제거
                 hard_dist = float(_get_setting("RAG_HARD_DISTANCE_THRESHOLD", 1.05))
                 gated = [r for r in merged if r.distance <= hard_dist]
@@ -3055,6 +3105,27 @@ class RAGService:
             }
 
         # ========================================
+        # STEP -1: 극도로 모호한 질문 조기 거부
+        # ========================================
+        _vague_stop = {
+            "그거", "이거", "저거", "뭐", "어떻게", "됐어", "됐나", "됐냐",
+            "어때", "있어", "없어", "했어", "할까", "인가", "인지", "그래서",
+            "좀", "혹시", "그런데", "근데", "아까", "거기", "여기",
+            "자세히", "알려줘", "알려줘요", "알려주세요", "설명해", "설명해줘",
+            "말해줘", "말해봐", "얘기해", "얘기해줘", "보여줘",
+            "더", "좀더", "다시", "한번", "한번더",
+        }
+        _vague_tokens = re.findall(r"[가-힣]{2,}", query_text)
+        _vague_meaningful = [t for t in _vague_tokens if t not in _vague_stop]
+        if len(_vague_meaningful) == 0 and len(query_text.strip()) < 20:
+            return {
+                "answer": "질문이 너무 모호하여 관련 정보를 검색할 수 없습니다. "
+                          "구체적인 키워드나 주제를 포함해 다시 질문해 주세요.",
+                "sources": [],
+                "query": query_text,
+            }
+
+        # ========================================
         # STEP 0: 시간 스코프 감지 + 날짜 기반 사전 필터
         # ========================================
         time_scope_days = _detect_time_scope(
@@ -3088,9 +3159,14 @@ class RAGService:
                 )
                 candidates = recent_candidates
             else:
+                # 시간 필터 결과가 부족해도 시간순 정렬 유지
+                candidates.sort(
+                    key=lambda r: (r.metadata or {}).get("published_at", ""),
+                    reverse=True,
+                )
                 logger.info(
                     f"[RAG 시간필터] {time_scope_days}일 이내 {len(recent_candidates)}개로 부족, "
-                    f"전체 {len(candidates)}개 유지"
+                    f"전체 {len(candidates)}개를 시간순으로 정렬"
                 )
 
         # ========================================
@@ -3129,6 +3205,30 @@ class RAGService:
             final_k=int(top_k) * 2,
             min_keyword_hits=min_hits,
         )
+
+        # ========================================
+        # STEP B-2: 키워드 매칭 문서의 distance 보정
+        # ========================================
+        _dist_skip_words = {
+            "자세히", "알려줘", "알려주세요", "설명해", "설명해줘", "말해줘",
+            "보여줘", "뉴스", "기사", "소식", "정보", "내용", "관련",
+            "최근", "최신", "오늘", "어제", "인기", "핫한", "주요",
+            "가장", "제일", "뭐야", "뭐가", "어때", "있어",
+        }
+        _filtered_entities = [e for e in key_entities if e not in _dist_skip_words]
+        if _filtered_entities:
+            for r in results:
+                meta = r.metadata or {}
+                combined = f"{meta.get('title', '')}\n{meta.get('excerpt', '')}\n{r.document or ''}"
+                combined_lower = combined.lower()
+                match_count = sum(1 for ent in _filtered_entities if ent.lower() in combined_lower)
+                if match_count > 0 and r.distance > 0.5:
+                    old_dist = r.distance
+                    r.distance = max(0.5 - (match_count * 0.05), 0.2)
+                    logger.debug(
+                        f"[RAG distance 보정] entity {match_count}개 매칭: "
+                        f"distance {old_dist:.3f} → {r.distance:.3f}"
+                    )
 
         # ========================================
         # STEP C: 거리 게이트 (하드 → 소프트 → fallback 단계적 적용)
