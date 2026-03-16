@@ -10,10 +10,24 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from rest_framework import viewsets
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
 
 from analyzer.models import TrendAnalysisResult
-from analyzer.serializers import TrendAnalysisResultSerializer
+from analyzer.serializers import (
+    TrendAnalysisResultListSerializer,
+    TrendAnalysisResultSerializer,
+)
+from common.list_cache import get_cached_list_response, set_cached_list_response
 from common.rate_limit import ReadAPIThrottle
+
+
+class AnalysisResultPagination(PageNumberPagination):
+    """분석 결과 목록 페이지네이션 — 응답 크기·부하 감소용"""
+
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 def _make_aware(value: Optional[datetime]) -> Optional[datetime]:
@@ -51,12 +65,26 @@ _LIST_ANALYSIS_PARAMETERS = [
 
 
 class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
-    """트렌드 분석 결과 ViewSet (전체 목록 조회용)"""
+    """트렌드 분석 결과 ViewSet (전체 목록 조회용). 목록은 Redis 캐시로 응답 가속."""
 
-    queryset = TrendAnalysisResult.objects.all()[:1000]
+    queryset = TrendAnalysisResult.objects.all()
     serializer_class = TrendAnalysisResultSerializer
     throttle_classes = [ReadAPIThrottle]
-    pagination_class = None
+    pagination_class = AnalysisResultPagination
+
+    def list(self, request, *args, **kwargs):
+        # 캐시 hit 시 DB/직렬화 없이 바로 반환 (목록 API 부하 감소)
+        cached = get_cached_list_response(request, "analyzer:results")
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        set_cached_list_response(request, "analyzer:results", response.data)
+        return response
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return TrendAnalysisResultListSerializer
+        return TrendAnalysisResultSerializer
 
     def get_queryset(self):
         queryset = TrendAnalysisResult.objects.all()
@@ -109,11 +137,16 @@ class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
 class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
     """분석 결과 ViewSet 기본 클래스"""
 
-    queryset = TrendAnalysisResult.objects.all()[:100]
+    queryset = TrendAnalysisResult.objects.all()
     serializer_class = TrendAnalysisResultSerializer
     throttle_classes = [ReadAPIThrottle]
     analysis_type = None
-    pagination_class = None
+    pagination_class = AnalysisResultPagination
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return TrendAnalysisResultListSerializer
+        return TrendAnalysisResultSerializer
 
     def _parse_url_params(self):
         platform = self.request.query_params.get("platform", None)
@@ -128,7 +161,14 @@ class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
 
     @extend_schema(parameters=_LIST_ANALYSIS_PARAMETERS)
     def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
+        # 키워드/비교 등 분석 목록도 Redis 캐시 (prefix는 analysis_type으로 구분되도록 공통 prefix 사용)
+        prefix = f"analyzer:analysis:{self.analysis_type or 'base'}"
+        cached = get_cached_list_response(request, prefix)
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        set_cached_list_response(request, prefix, response.data)
+        return response
 
     def get_queryset(self):
         queryset = TrendAnalysisResult.objects.all()

@@ -12,7 +12,9 @@ from django.db.models import Q, QuerySet
 from rest_framework import viewsets
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
 
+from common.list_cache import get_cached_list_response, set_cached_list_response
 from common.rate_limit import ReadAPIThrottle
 from data_collector.models import NewsArticle, SocialMediaPost
 from data_collector.serializers import (
@@ -53,7 +55,7 @@ class DashboardPageNumberPagination(PageNumberPagination):
 
 
 class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
-    """뉴스 기사 ViewSet (읽기 전용)"""
+    """뉴스 기사 ViewSet (읽기 전용). 목록은 Redis 캐시로 응답 가속."""
 
     queryset = NewsArticle.objects.all()
     serializer_class = NewsArticleSerializer
@@ -63,6 +65,15 @@ class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ["published_at", "collected_at", "title", "source__publisher"]
     ordering = ["-collected_at"]
     pagination_class = DashboardPageNumberPagination
+
+    def list(self, request, *args, **kwargs):
+        # 캐시 hit 시 DB/직렬화 없이 바로 반환 (목록 API 부하 감소)
+        cached = get_cached_list_response(request, "dashboard:news")
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        set_cached_list_response(request, "dashboard:news", response.data)
+        return response
 
     def get_queryset(self):
         queryset = NewsArticle.objects.all()
@@ -100,7 +111,7 @@ class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
-    """소셜 미디어 게시물 ViewSet (읽기 전용)"""
+    """소셜 미디어 게시물 ViewSet (읽기 전용). 목록은 Redis 캐시로 응답 가속."""
 
     queryset = SocialMediaPost.objects.all()
     serializer_class = BaseSocialMediaPostSerializer
@@ -110,6 +121,15 @@ class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ["published_at", "collected_at", "title", "source__display_name"]
     ordering = ["-collected_at"]
     pagination_class = DashboardPageNumberPagination
+
+    def list(self, request, *args, **kwargs):
+        # 캐시 hit 시 DB/직렬화 없이 바로 반환 (목록 API 부하 감소)
+        cached = get_cached_list_response(request, "dashboard:social")
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        set_cached_list_response(request, "dashboard:social", response.data)
+        return response
 
     def get_queryset(self):
         queryset = SocialMediaPost.objects.all()

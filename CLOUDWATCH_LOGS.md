@@ -27,12 +27,19 @@ CONTAINER_ID=$(docker ps -q -f name=trend-web); sudo tail -n 1 /var/lib/docker/c
 **EC2에서 확인:**
 ```bash
 cd ~/trend
-docker compose up -d
-sleep 5
+# 로그가 안 보일 때: .env에 TREND_LOGS_DIR=/home/ubuntu/trend 추가 후 아래 실행
+mkdir -p logs
+docker compose up -d --force-recreate web
+sleep 10
 ls -la logs/
-cat logs/access.log
+tail -5 logs/access.log
 tail -5 logs/error.log
 ```
+
+**EC2에서 로그 디렉터리가 비어 있을 때 (컨테이너에 /app/logs가 없을 때):**
+1. `.env`에 `TREND_LOGS_DIR=/home/ubuntu/trend` 한 줄 추가 (상대 경로 대신 절대 경로 사용).
+2. `mkdir -p ~/trend/logs` 후 `docker compose up -d --force-recreate web` 실행.
+3. 마운트 확인: `docker inspect trend-web-1 --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'` 에 `/home/ubuntu/trend/logs` -> `/app/logs` 가 있어야 함.
 
 ---
 
