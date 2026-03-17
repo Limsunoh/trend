@@ -86,6 +86,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
+    "common.middleware.ActiveRequestCountMiddleware",  # 동시 요청 수 (디버그용)
     "common.middleware.SecurityHeadersMiddleware",  # Referrer-Policy
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

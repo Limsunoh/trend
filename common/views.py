@@ -6,6 +6,7 @@ from django.conf import settings
 from django.http import FileResponse, Http404, JsonResponse
 
 from common.health import run_health_checks
+from common.middleware import get_active_requests_count
 
 
 def serve_spa(request, path=""):
@@ -39,3 +40,19 @@ def health_view(request):
         "checks": checks,
     }
     return JsonResponse(body, status=status_code)
+
+
+def active_requests_view(request):
+    """
+    GET /api/debug/active-requests/
+    현재 이 워커 프로세스에서 처리 중인 요청 수. 부하 테스트 시 gevent 동시 처리 확인용.
+    (워커 4개 × worker-connections 1000 = 최대 4000 동시 연결 가능. 값은 워커당이므로 총합이 아님.)
+    """
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed"}, status=405)
+    return JsonResponse(
+        {
+            "active_requests": get_active_requests_count(),
+            "note": "per-worker count; total = sum across 4 workers",
+        }
+    )

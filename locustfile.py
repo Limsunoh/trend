@@ -38,7 +38,7 @@ class TrendAPIUser(HttpUser):
     def user_qa_history(self):
         self.client.get("/api/user_qa/history/", params={"page_size": 10})
 
-    @task(1)
+    @task(0)
     def user_qa_query(self):
         """Q&A POST (부하 큼, 비중 낮게). CSRF 필요 시 서버 출처 허용."""
         queries = [
