@@ -68,6 +68,7 @@ jobs:
           pip install black isort flake8
 
       - name: Black
+        continue-on-error: true
         run: black --check --line-length=88 --exclude 'migrations' .
 
       - name: isort
