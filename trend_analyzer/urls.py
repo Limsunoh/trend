@@ -12,11 +12,12 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
-from common.views import health_view, serve_spa
+from common.views import active_requests_view, health_view, serve_spa
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/health/", health_view),
+    path("api/debug/active-requests/", active_requests_view),
     path("api/dashboard/", include("dashboard.urls")),
     path("api/analyzer/", include("analyzer.urls")),
     path("api/collector/", include("data_collector.urls")),
