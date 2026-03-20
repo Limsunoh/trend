@@ -537,9 +537,27 @@ def _expand_query_for_search(query_text: str, key_entities: List[str]) -> List[s
 
     # 국가 미지정 시 "한국" 변형 추가 → 한국 콘텐츠 우선 검색
     _country_names = {
-        "한국", "미국", "일본", "중국", "영국", "독일", "프랑스", "러시아",
-        "북한", "대만", "호주", "캐나다", "인도", "이란", "이스라엘",
-        "korea", "usa", "us", "japan", "china", "uk",
+        "한국",
+        "미국",
+        "일본",
+        "중국",
+        "영국",
+        "독일",
+        "프랑스",
+        "러시아",
+        "북한",
+        "대만",
+        "호주",
+        "캐나다",
+        "인도",
+        "이란",
+        "이스라엘",
+        "korea",
+        "usa",
+        "us",
+        "japan",
+        "china",
+        "uk",
     }
     has_country = any(c in q_lower for c in _country_names)
     if not has_country:
@@ -724,15 +742,40 @@ INTENSITY_PREFIXES = [
 
 # 인기/주목 수식어: "~ 유명한", "~ 핫한" 등
 POPULARITY_WORDS = [
-    "유명", "핫", "인기", "뜨는", "뜨거운", "뜨고",
-    "화제", "주목", "난리", "대박", "이슈",
+    "유명",
+    "핫",
+    "인기",
+    "뜨는",
+    "뜨거운",
+    "뜨고",
+    "화제",
+    "주목",
+    "난리",
+    "대박",
+    "이슈",
 ]
 
 # 탐색적 트렌드 신호 단어: 특정 주제 없는 탐색적 쿼리에서 trend_enhanced 라우팅
 TREND_SIGNAL_WORDS = [
-    "트렌드", "이슈", "재밌", "재미있", "흥미", "볼만",
-    "큰", "컸", "많은", "궁금", "요즘", "대충",
-    "놓친", "못본", "못 본", "빠진", "주요", "중요한", "핵심",
+    "트렌드",
+    "이슈",
+    "재밌",
+    "재미있",
+    "흥미",
+    "볼만",
+    "큰",
+    "컸",
+    "많은",
+    "궁금",
+    "요즘",
+    "대충",
+    "놓친",
+    "못본",
+    "못 본",
+    "빠진",
+    "주요",
+    "중요한",
+    "핵심",
 ]
 
 # 키워드 수식어: "키워드" 앞에 붙어서 분석 의도를 나타내는 단어
@@ -1372,18 +1415,66 @@ def _extract_topic_from_query(query_text: str) -> List[str]:
             "현재",
             "오늘",
             # 일반 불용어
-            "내용", "이슈", "소식", "정보", "많이",
-            "대해", "대해서", "관련", "관련된", "관해", "관해서",
-            "알려줘", "알려주세요", "알려", "뭐야", "뭐", "뭔가", "어때",
-            "뭐가", "뭘", "뭐를", "뭐든", "어디", "어디서", "언제", "얼마나",
-            "컸어", "많지", "있지", "없지", "됐어", "했어",
+            "내용",
+            "이슈",
+            "소식",
+            "정보",
+            "많이",
+            "대해",
+            "대해서",
+            "관련",
+            "관련된",
+            "관해",
+            "관해서",
+            "알려줘",
+            "알려주세요",
+            "알려",
+            "뭐야",
+            "뭐",
+            "뭔가",
+            "어때",
+            "뭐가",
+            "뭘",
+            "뭐를",
+            "뭐든",
+            "어디",
+            "어디서",
+            "언제",
+            "얼마나",
+            "컸어",
+            "많지",
+            "있지",
+            "없지",
+            "됐어",
+            "했어",
             # 감정/상태 표현 (주제가 아닌 수식어)
-            "불안", "불안해", "불안한", "걱정", "걱정돼", "무서워",
-            "답답", "답답해", "짜증", "화나", "힘들", "미치겠",
-            "심각", "심각해", "궁금", "궁금해", "안좋", "나쁜", "좋은",
+            "불안",
+            "불안해",
+            "불안한",
+            "걱정",
+            "걱정돼",
+            "무서워",
+            "답답",
+            "답답해",
+            "짜증",
+            "화나",
+            "힘들",
+            "미치겠",
+            "심각",
+            "심각해",
+            "궁금",
+            "궁금해",
+            "안좋",
+            "나쁜",
+            "좋은",
             # 의문/탐색 표현 (질문 구성어)
-            "무슨일", "무슨일이", "어쩌다", "어떡해",
-            "어쩌면", "진짜", "너무",
+            "무슨일",
+            "무슨일이",
+            "어쩌다",
+            "어떡해",
+            "어쩌면",
+            "진짜",
+            "너무",
             # 조사·어미·기능어
             "에",
             "은",
@@ -1420,10 +1511,26 @@ def _extract_topic_from_query(query_text: str) -> List[str]:
     # 토큰 분리 후 노이즈 제거
     # 동사 어미도 제거 (조사 제거만으로는 "무슨일이야" → "무슨일" 변환 불가)
     _topic_verb_suffixes = [
-        "이야", "인가", "일까", "인지", "인데", "이냐",
-        "해줘", "해봐", "할까", "했어", "하는", "한다",
-        "뭐야", "뭐냐", "뭐임", "있어", "있나", "없어",
-        "줘", "해",
+        "이야",
+        "인가",
+        "일까",
+        "인지",
+        "인데",
+        "이냐",
+        "해줘",
+        "해봐",
+        "할까",
+        "했어",
+        "하는",
+        "한다",
+        "뭐야",
+        "뭐냐",
+        "뭐임",
+        "있어",
+        "있나",
+        "없어",
+        "줘",
+        "해",
     ]
     tokens = q.split()
     topics = []
@@ -1776,9 +1883,7 @@ def _get_trending_keywords_by_topic(
     return keywords, summary_text
 
 
-def _detect_time_scope(
-    query_text: str, intent_time_focus: str = ""
-) -> "tuple":
+def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> "tuple":
     """
     쿼리의 시간 범위를 (range_start_dt, range_end_dt, scope_days) 튜플로 반환.
     - range_start_dt: datetime(KST) 범위 시작 (inclusive), None=제약없음
@@ -1798,9 +1903,8 @@ def _detect_time_scope(
 
     # 특정 날짜 패턴: "3월 16일", "3/16", "03월 16일" 등
     import re as _re
-    _date_match = _re.search(
-        r"(\d{1,2})\s*[월/\.]\s*(\d{1,2})\s*일?", q
-    )
+
+    _date_match = _re.search(r"(\d{1,2})\s*[월/\.]\s*(\d{1,2})\s*일?", q)
     if _date_match:
         month = int(_date_match.group(1))
         day = int(_date_match.group(2))
@@ -2334,9 +2438,25 @@ class OpenAIResponsesLLM:
         _country_mentioned = any(
             c in _q_lower_llm
             for c in [
-                "한국", "미국", "일본", "중국", "영국", "독일", "프랑스",
-                "러시아", "북한", "대만", "호주", "캐나다", "인도", "이란",
-                "korea", "usa", "japan", "china", "uk",
+                "한국",
+                "미국",
+                "일본",
+                "중국",
+                "영국",
+                "독일",
+                "프랑스",
+                "러시아",
+                "북한",
+                "대만",
+                "호주",
+                "캐나다",
+                "인도",
+                "이란",
+                "korea",
+                "usa",
+                "japan",
+                "china",
+                "uk",
             ]
         )
         _korea_hint = (
@@ -3263,7 +3383,8 @@ class RAGService:
 
                 # 시간 필터 (일반 파이프라인과 동일 - KST 캘린더 범위)
                 _t_range_start, _t_range_end, _t_scope = _detect_time_scope(
-                    query_text, intent_time_focus=intent_info.get("time_focus", ""),
+                    query_text,
+                    intent_time_focus=intent_info.get("time_focus", ""),
                 )
                 if _t_range_start is not None:
                     from datetime import datetime, timezone
@@ -3472,7 +3593,9 @@ class RAGService:
                 if r.id not in seen_semantic_ids:
                     seen_semantic_ids.add(r.id)
                     semantic_candidates.append(r)
-        logger.info(f"[RAG 검색] 시맨틱 검색 결과: {len(semantic_candidates)}개 (쿼리 {len(expanded_queries)}개)")
+        logger.info(
+            f"[RAG 검색] 시맨틱 검색 결과: {len(semantic_candidates)}개 (쿼리 {len(expanded_queries)}개)"
+        )
 
         # 3) 키워드 검색 (후보군 B) - 엔티티가 있을 때만
         keyword_candidates: List[SearchResult] = []
@@ -3545,19 +3668,29 @@ class RAGService:
 
         # (A-0) 시스템 메타 질문 감지 ("너 누구야?", "뭘 할 수 있어?" 등)
         _meta_patterns = [
-            "너 누구", "넌 누구", "당신은 누구", "뭘 할 수 있",
-            "뭐 할 수 있", "무엇을 할 수", "어떤 기능",
-            "사용법", "사용 방법", "어떻게 써", "어떻게 사용",
+            "너 누구",
+            "넌 누구",
+            "당신은 누구",
+            "뭘 할 수 있",
+            "뭐 할 수 있",
+            "무엇을 할 수",
+            "어떤 기능",
+            "사용법",
+            "사용 방법",
+            "어떻게 써",
+            "어떻게 사용",
         ]
         if any(p in _q_lower for p in _meta_patterns):
             return {
-                "answer": "저는 뉴스와 커뮤니티 트렌드 데이터를 기반으로 답변하는 "
-                          "Q&A 어시스턴트입니다.\n\n"
-                          "다음과 같은 질문에 답변할 수 있습니다:\n"
-                          "- 최신 뉴스 요약 (예: \"오늘 주요 뉴스 알려줘\")\n"
-                          "- 특정 주제 검색 (예: \"AI 관련 최신 소식\")\n"
-                          "- 커뮤니티 반응 (예: \"레딧에서 한국에 대해 뭐라고 해?\")\n"
-                          "- 트렌드 분석 (예: \"요즘 가장 많이 언급된 키워드\")",
+                "answer": (
+                    "저는 뉴스와 커뮤니티 트렌드 데이터를 기반으로 답변하는 "
+                    "Q&A 어시스턴트입니다.\n\n"
+                    "다음과 같은 질문에 답변할 수 있습니다:\n"
+                    '- 최신 뉴스 요약 (예: "오늘 주요 뉴스 알려줘")\n'
+                    '- 특정 주제 검색 (예: "AI 관련 최신 소식")\n'
+                    '- 커뮤니티 반응 (예: "레딧에서 한국에 대해 뭐라고 해?")\n'
+                    '- 트렌드 분석 (예: "요즘 가장 많이 언급된 키워드")'
+                ),
                 "sources": [],
                 "query": query_text,
                 "model": final_model,
@@ -3567,34 +3700,89 @@ class RAGService:
         # "그거 믿어도 돼?", "출처가 어디야?", "더 자세히", "요약해줘" 등
         # 검색 가능한 주제(엔티티)가 없는 대화형 질문
         _followup_patterns = [
-            "믿어도", "믿을 수", "신뢰", "정확해", "맞아",
-            "출처가", "출처는", "출처를", "근거가", "근거는",
-            "더 자세히", "더 알려", "더 설명", "좀 더",
-            "요약해", "정리해줘", "다시 말해", "다시 설명",
-            "왜 그래", "왜 그런", "무슨 말", "무슨 뜻", "뭔 말", "뭔 소리",
+            "믿어도",
+            "믿을 수",
+            "신뢰",
+            "정확해",
+            "맞아",
+            "출처가",
+            "출처는",
+            "출처를",
+            "근거가",
+            "근거는",
+            "더 자세히",
+            "더 알려",
+            "더 설명",
+            "좀 더",
+            "요약해",
+            "정리해줘",
+            "다시 말해",
+            "다시 설명",
+            "왜 그래",
+            "왜 그런",
+            "무슨 말",
+            "무슨 뜻",
+            "뭔 말",
+            "뭔 소리",
         ]
         _is_followup = any(p in _q_lower for p in _followup_patterns)
         if _is_followup:
             # 실제 검색 주제가 있는지 확인 (엔티티 추출)
             _followup_stop = {
-                "믿어", "출처", "근거", "신뢰", "정확", "요약", "정리",
-                "자세히", "설명", "알려", "보여", "말해", "얘기",
-                "어디", "뭐야", "뭔지", "어때", "맞아", "맞는",
-                "그거", "이거", "저거", "그건", "이건", "더", "좀",
-                "해줘", "해주", "해봐", "할래", "할까", "다시",
-                "왜", "뭔", "무슨", "진짜", "확실", "사실",
+                "믿어",
+                "출처",
+                "근거",
+                "신뢰",
+                "정확",
+                "요약",
+                "정리",
+                "자세히",
+                "설명",
+                "알려",
+                "보여",
+                "말해",
+                "얘기",
+                "어디",
+                "뭐야",
+                "뭔지",
+                "어때",
+                "맞아",
+                "맞는",
+                "그거",
+                "이거",
+                "저거",
+                "그건",
+                "이건",
+                "더",
+                "좀",
+                "해줘",
+                "해주",
+                "해봐",
+                "할래",
+                "할까",
+                "다시",
+                "왜",
+                "뭔",
+                "무슨",
+                "진짜",
+                "확실",
+                "사실",
             }
             _fu_tokens = re.findall(r"[가-힣]{2,}", query_text)
             # 부분 문자열 매칭: "믿어도"→"믿어" 포함, "출처가"→"출처" 포함
             _fu_meaningful = [
-                t for t in _fu_tokens
+                t
+                for t in _fu_tokens
                 if not any(s in t or t in s for s in _followup_stop)
             ]
             if not _fu_meaningful:
                 return {
-                    "answer": "이전 대화 맥락을 참조할 수 없어 답변이 어렵습니다. "
-                              "궁금한 주제나 키워드를 포함해서 다시 질문해 주세요.\n"
-                              "예: \"삼성전자 관련 뉴스 출처 알려줘\", \"AI 트렌드 자세히 알려줘\"",
+                    "answer": (
+                        "이전 대화 맥락을 참조할 수 없어 답변이 어렵습니다. "
+                        "궁금한 주제나 키워드를 포함해서 다시 질문해 주세요.\n"
+                        '예: "삼성전자 관련 뉴스 출처 알려줘",'
+                        ' "AI 트렌드 자세히 알려줘"'
+                    ),
                     "sources": [],
                     "query": query_text,
                     "model": final_model,
@@ -3646,8 +3834,10 @@ class RAGService:
         _vague_meaningful = [t for t in _vague_tokens if t not in _vague_stop]
         if len(_vague_meaningful) == 0 and len(query_text.strip()) < 20:
             return {
-                "answer": "질문이 너무 모호하여 관련 정보를 검색할 수 없습니다. "
-                "구체적인 키워드나 주제를 포함해 다시 질문해 주세요.",
+                "answer": (
+                    "질문이 너무 모호하여 관련 정보를 검색할 수 없습니다. "
+                    "구체적인 키워드나 주제를 포함해 다시 질문해 주세요."
+                ),
                 "sources": [],
                 "query": query_text,
                 "model": final_model,
@@ -3789,7 +3979,9 @@ class RAGService:
                 meta = r.metadata or {}
                 combined = f"{meta.get('title', '')}\n{meta.get('excerpt', '')}\n{r.document or ''}"
                 combined_lower = combined.lower()
-                match_count = sum(1 for ent in _filtered_entities if ent.lower() in combined_lower)
+                match_count = sum(
+                    1 for ent in _filtered_entities if ent.lower() in combined_lower
+                )
                 if match_count > 0 and r.distance > 0.40:
                     # cosine 거리 0.80 초과는 보정 제외 (우연한 키워드 매칭)
                     if r.distance > 0.80:
@@ -4130,15 +4322,28 @@ class RAGService:
 
         # "정보 없음" 답변이면 출처를 비워서 혼란 방지
         _no_info_signals = [
-            "정보가 없습니다", "정보는 없습니다", "정보를 찾을 수 없",
-            "정보가 부족", "정보가 포함되어 있지 않",
-            "자료가 없습니다", "자료가 부족", "자료가 없어",
-            "제공된 context에 없", "제공된 context에는 없",
-            "context에 포함되어 있지 않", "context에는 포함되어 있지 않",
-            "관련 정보가 없", "관련 자료가 없", "관련된 정보가 없",
-            "비교할 수 있는 자료가 없", "비교가 불가능",
-            "확인되지 않", "찾을 수 없습니다", "제공하기 어렵",
-            "답변드리기 어렵", "요청하신 내용에 대한 관련",
+            "정보가 없습니다",
+            "정보는 없습니다",
+            "정보를 찾을 수 없",
+            "정보가 부족",
+            "정보가 포함되어 있지 않",
+            "자료가 없습니다",
+            "자료가 부족",
+            "자료가 없어",
+            "제공된 context에 없",
+            "제공된 context에는 없",
+            "context에 포함되어 있지 않",
+            "context에는 포함되어 있지 않",
+            "관련 정보가 없",
+            "관련 자료가 없",
+            "관련된 정보가 없",
+            "비교할 수 있는 자료가 없",
+            "비교가 불가능",
+            "확인되지 않",
+            "찾을 수 없습니다",
+            "제공하기 어렵",
+            "답변드리기 어렵",
+            "요청하신 내용에 대한 관련",
         ]
         _answer_lower = answer.lower().replace(" ", "")
         if any(sig.replace(" ", "") in _answer_lower for sig in _no_info_signals):
