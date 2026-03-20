@@ -103,17 +103,26 @@ class Command(BaseCommand):
             title = obj.title
             desc = obj.description  # NewsArticle에는 content가 없고 description이 핵심
 
-            text = build_embedding_text(title, desc)
-            if not text:
-                continue  # 임베딩할 의미 텍스트 자체가 없으면 skip
-
             published_at = obj.published_at.isoformat() if obj.published_at else None
 
-            # ✅ 뉴스에서 “중요한 2가지”
+            # ✅ 뉴스에서 "중요한 2가지"
             # - publisher: 뉴스소스(중앙일보/네이버 등)
             # - category: 기사 카테고리(없으면 소스 카테고리 fallback)
             publisher = obj.source.publisher if obj.source else None
             category = obj.category or (obj.source.category if obj.source else None)
+
+            # 출처/분류/저자 정보를 포함하여 시맨틱 검색 품질 향상
+            extra_parts = []
+            if publisher:
+                extra_parts.append(f"출처: {publisher}")
+            if category:
+                extra_parts.append(f"분류: {category}")
+            if obj.author:
+                extra_parts.append(f"기자: {obj.author}")
+            extra_text = "\n".join(extra_parts)
+            text = build_embedding_text(title, f"{desc}\n{extra_text}" if extra_text else desc)
+            if not text:
+                continue  # 임베딩할 의미 텍스트 자체가 없으면 skip
 
             chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
             for i, ch in enumerate(chunks):

@@ -408,14 +408,14 @@ VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", BASE_DIR / "vector_db")
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", BASE_DIR / "chroma_db")
 
 # RAG Quality Gating Thresholds
-# L2² 거리 기준 (정규화 임베딩: L2² = 2*(1-cos_sim))
-# 1.05 → cos_sim 0.475 미만만 차단 (진정한 무관 문서)
-RAG_HARD_DISTANCE_THRESHOLD = float(os.getenv("RAG_HARD_DISTANCE_THRESHOLD", "1.05"))
-# 평균 거리 0.65 초과 → LLM에 "low" 시그널
-RAG_WEAK_RELEVANCE_THRESHOLD = float(os.getenv("RAG_WEAK_RELEVANCE_THRESHOLD", "0.65"))
-RAG_NEWS_DISTANCE_THRESHOLD = float(os.getenv("RAG_NEWS_DISTANCE_THRESHOLD", "0.90"))
+# cosine 거리 기준 (distance = 1 - cosine_similarity)
+# 0.50 → cos_sim 0.50 미만만 차단 (진정한 무관 문서)
+RAG_HARD_DISTANCE_THRESHOLD = float(os.getenv("RAG_HARD_DISTANCE_THRESHOLD", "0.50"))
+# 평균 거리 0.35 초과 → LLM에 "low" 시그널
+RAG_WEAK_RELEVANCE_THRESHOLD = float(os.getenv("RAG_WEAK_RELEVANCE_THRESHOLD", "0.35"))
+RAG_NEWS_DISTANCE_THRESHOLD = float(os.getenv("RAG_NEWS_DISTANCE_THRESHOLD", "0.45"))
 RAG_COMMUNITY_DISTANCE_THRESHOLD = float(
-    os.getenv("RAG_COMMUNITY_DISTANCE_THRESHOLD", "0.90")
+    os.getenv("RAG_COMMUNITY_DISTANCE_THRESHOLD", "0.45")
 )
 
 # Logging Configuration
