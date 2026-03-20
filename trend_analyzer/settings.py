@@ -53,6 +53,10 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:8000",
     "https://3.37.203.226:8000",
     "https://3.37.203.226",
+    "http://aitrend.홈페이지.한국",
+    "https://aitrend.홈페이지.한국",
+    "http://www.aitrend.홈페이지.한국",
+    "https://www.aitrend.홈페이지.한국",
 ]
 
 # 보안 헤더 (SecurityMiddleware / XFrameOptionsMiddleware 가 적용)
