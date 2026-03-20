@@ -57,6 +57,10 @@ CSRF_TRUSTED_ORIGINS = [
     "https://aitrend.홈페이지.한국",
     "http://www.aitrend.홈페이지.한국",
     "https://www.aitrend.홈페이지.한국",
+    "http://aitrend.xn--hu5b25b77nvwc.xn--3e0b707e",
+    "https://aitrend.xn--hu5b25b77nvwc.xn--3e0b707e",
+    "http://www.aitrend.xn--hu5b25b77nvwc.xn--3e0b707e",
+    "https://www.aitrend.xn--hu5b25b77nvwc.xn--3e0b707e",
 ]
 
 # 보안 헤더 (SecurityMiddleware / XFrameOptionsMiddleware 가 적용)
