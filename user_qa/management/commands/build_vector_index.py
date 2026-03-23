@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from django.core.management.base import BaseCommand
+from django.db.models import F
 
 from data_collector.models import NewsArticle, SocialMediaPost
 from user_qa.services import VectorDBService
@@ -43,8 +44,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--collection", type=str, default="trend_docs")
-        parser.add_argument("--limit-news", type=int, default=5000)
-        parser.add_argument("--limit-social", type=int, default=5000)
+        parser.add_argument("--limit-news", type=int, default=0)
+        parser.add_argument("--limit-social", type=int, default=0)
         parser.add_argument("--chunk-size", type=int, default=1000)
         parser.add_argument("--overlap", type=int, default=150)
         parser.add_argument(
@@ -89,9 +90,11 @@ class Command(BaseCommand):
     def _index_news(
         self, vdb: VectorDBService, limit: int, chunk_size: int, overlap: int
     ) -> int:
-        qs = NewsArticle.objects.select_related("source").order_by("-published_at")[
-            :limit
-        ]
+        qs = NewsArticle.objects.select_related("source").order_by(
+            F("published_at").desc(nulls_last=True)
+        )
+        if limit:
+            qs = qs[:limit]
 
         ids: List[str] = []
         docs: List[str] = []
@@ -120,7 +123,9 @@ class Command(BaseCommand):
             if obj.author:
                 extra_parts.append(f"기자: {obj.author}")
             extra_text = "\n".join(extra_parts)
-            text = build_embedding_text(title, f"{desc}\n{extra_text}" if extra_text else desc)
+            text = build_embedding_text(
+                title, f"{desc}\n{extra_text}" if extra_text else desc
+            )
             if not text:
                 continue  # 임베딩할 의미 텍스트 자체가 없으면 skip
 
@@ -174,13 +179,16 @@ class Command(BaseCommand):
         overlap: int,
         platform_opt: str = "all",
     ) -> int:
-        qs = SocialMediaPost.objects.select_related("source").order_by("-published_at")
+        qs = SocialMediaPost.objects.select_related("source").order_by(
+            F("published_at").desc(nulls_last=True)
+        )
 
         # ✅ 플랫폼 필터링 (source.platform 기반)
         if platform_opt and platform_opt != "all":
             qs = qs.filter(source__platform=platform_opt)
 
-        qs = qs[:limit]
+        if limit:
+            qs = qs[:limit]
 
         ids: List[str] = []
         docs: List[str] = []
