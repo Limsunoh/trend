@@ -60,7 +60,7 @@ frozenlist==1.8.0
 fsspec==2025.10.0
 google-auth==2.43.0
 googleapis-common-protos==1.72.0
-gevent==24.2.1
+gevent>=24.10.1
 greenlet==3.2.4
 grpcio==1.76.0
 h11==0.16.0
