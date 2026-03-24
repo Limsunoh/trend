@@ -1,22 +1,6 @@
-"""
-Django REST Framework Serializers 모듈
-
-이 모듈은 data_collector 앱의 모델들을 JSON 형태로 직렬화/역직렬화하는
-Serializer 클래스들을 정의합니다.
-
-Serializer의 역할:
-1. 직렬화 (Serialization): Django 모델 객체 → JSON (API 응답)
-2. 역직렬화 (Deserialization): JSON → Django 모델 객체 (API 요청)
-
-사용 목적:
-- REST API를 통한 데이터 조회 (GET)
-- REST API를 통한 데이터 생성/수정 (POST, PUT, PATCH)
-- 데이터 검증 (Validation)
-- 중첩된 관계 표현 (Nested Relationships)
-"""
-
 from typing import Any, Dict, Optional
 
+from django.db.models import Count
 from rest_framework import serializers
 
 from .models import (
@@ -32,29 +16,11 @@ class NewsSourceSerializer(serializers.ModelSerializer):
     """
     뉴스 소스 Serializer
 
-    NewsSource 모델을 JSON으로 변환하거나, JSON으로부터 NewsSource 객체를 생성합니다.
-
     주요 기능:
     - 뉴스 소스 정보 직렬화/역직렬화
     - 수집된 기사 개수 표시 (읽기 전용)
-    - 자동 생성 필드는 읽기 전용으로 설정
-
-    사용 예시:
-        # 직렬화 (모델 → JSON)
-        source = NewsSource.objects.get(id=1)
-        serializer = NewsSourceSerializer(source)
-        json_data = serializer.data
-        # {'id': 1, 'name': '경향신문', 'url': '...', ...}
-
-        # 역직렬화 (JSON → 모델)
-        data = {'name': '조선일보', 'url': 'https://...', 'source_type': 'rss'}
-        serializer = NewsSourceSerializer(data=data)
-        if serializer.is_valid():
-            source = serializer.save()  # 모델 객체 생성
     """
 
-    # 읽기 전용 필드: 수집된 기사 개수
-    # 실제 모델 필드는 아니지만, 관련 기사 개수를 계산하여 표시합니다.
     article_count = serializers.IntegerField(
         read_only=True, help_text="이 소스에서 수집된 기사 개수"
     )
@@ -78,39 +44,33 @@ class NewsSourceSerializer(serializers.ModelSerializer):
         - extra_kwargs: 필드별 추가 설정
         """
 
-        model = NewsSource  # 연동할 Django 모델
+        model = NewsSource
 
-        # 직렬화에 포함할 모든 필드
-        # '__all__'을 사용하면 모델의 모든 필드를 포함합니다.
         fields = "__all__"
 
-        # 읽기 전용 필드들
-        # 이 필드들은 API 요청으로 생성/수정할 수 없습니다.
-        # (데이터베이스나 코드에서만 설정)
         read_only_fields = [
-            "id",  # ID는 자동 생성
-            "created_at",  # 생성 시간은 자동 설정
-            "updated_at",  # 수정 시간은 자동 설정
-            "last_collected_at",  # 마지막 수집 시간은 수집 작업에서 설정
+            "id",
+            "created_at",
+            "updated_at",
+            "last_collected_at",
         ]
 
-        # 필드별 추가 설정
         extra_kwargs = {
             "name": {
                 "help_text": "뉴스 소스의 이름 (예: 경향신문, 조선일보)",
-                "required": True,  # 필수 필드
+                "required": True,
             },
             "url": {
                 "help_text": "RSS 피드 URL 또는 API 엔드포인트 주소",
-                "required": True,  # 필수 필드
+                "required": True,
             },
             "source_type": {
                 "help_text": "데이터 수집 방식 (rss, api, scraping)",
-                "required": False,  # 기본값이 있으므로 선택
+                "required": False,
             },
             "is_active": {
                 "help_text": "이 소스에서 데이터를 수집할지 여부",
-                "required": False,  # 기본값(True)이 있으므로 선택
+                "required": False,
             },
             "collection_interval": {
                 "help_text": "데이터 수집 주기 (분 단위)",
@@ -123,78 +83,50 @@ class NewsSourceSerializer(serializers.ModelSerializer):
     def validate(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         전체 데이터 검증 메서드
-
-        모든 필드를 하나의 메서드에서 검증합니다.
-        data는 딕셔너리 형태로 모든 필드 값이 포함되어 있습니다.
-
-        개별 필드 검증 메서드(validate_name, validate_url) 대신
-        이 메서드 하나에서 모든 검증을 수행합니다.
-
-        Args:
-            data: 검증할 전체 데이터 딕셔너리
-                예: {'name': '경향신문', 'url': 'https://...', 'source_type': 'rss'...}
-
-        Returns:
-            검증된 데이터 딕셔너리 (필요시 값 수정 후 반환)
-
-        Raises:
-            serializers.ValidationError: 검증 실패 시
-                딕셔너리 형태로 필드별 에러 메시지 지정 가능
-                예: {'name': '소스 이름은 필수입니다.', 'url': 'URL 형식이 올바르지 않습니다.'}
         """
         # name 필드 검증 및 정리
         if "name" in data:
             name = data.get("name", "")
-            # 문자열인 경우에만 strip() 적용
             if isinstance(name, str):
                 name = name.strip()
 
-            # 이름이 비어있는지 확인
             if not name:
                 raise serializers.ValidationError({"name": "소스 이름은 필수입니다."})
 
-            # 검증된 이름을 딕셔너리에 다시 저장 (공백 제거된 값)
             data["name"] = name
 
         # url 필드 검증
         if "url" in data:
             url = data.get("url", "")
-            # 문자열인 경우에만 strip() 적용
             if isinstance(url, str):
                 url = url.strip()
 
-            # URL이 비어있는지 확인
             if not url:
                 raise serializers.ValidationError({"url": "URL은 필수입니다."})
 
-            # URL 형식 검증 (http:// 또는 https://로 시작하는지 확인)
             if not (url.startswith("http://") or url.startswith("https://")):
                 raise serializers.ValidationError(
                     {"url": "URL은 http:// 또는 https://로 시작해야 합니다."}
                 )
 
-            # 검증된 URL을 딕셔너리에 다시 저장
             data["url"] = url
 
-        # 모든 검증 통과 시 검증된 데이터 딕셔너리 반환
         return data
 
     def to_representation(self, instance):
         """
         직렬화 시 추가 데이터를 포함하는 메서드
-
         모델 필드 외에 추가 정보(예: 관련 기사 개수)를 포함할 수 있습니다.
-
-        Args:
-            instance: 직렬화할 모델 인스턴스
-
-        Returns:
-            직렬화된 딕셔너리
         """
-        # 기본 직렬화 수행
         representation = super().to_representation(instance)
 
-        # 수집된 기사 개수 추가
+        # 목록 직렬화에서는 parent serializer가 미리 계산한 맵을 사용해
+        # N+1을 방지합니다.
+        count_map = self.context.get("source_article_count_map")
+        if isinstance(count_map, dict):
+            representation["article_count"] = int(count_map.get(instance.id, 0))
+            return representation
+
         # instance.articles는 related_name='articles'로 정의된 역참조입니다.
         representation["article_count"] = instance.articles.count()
 
@@ -202,25 +134,7 @@ class NewsSourceSerializer(serializers.ModelSerializer):
 
 
 class NewsArticleSerializer(serializers.ModelSerializer):
-    """
-    뉴스 기사 Serializer
-
-    NewsArticle 모델을 JSON으로 변환하거나, JSON으로부터 NewsArticle 객체를 생성합니다.
-
-    주요 기능:
-    - 뉴스 기사 정보 직렬화/역직렬화
-    - 소스 정보 중첩 표시 (nested representation)
-    - 제목, 설명 등의 검증
-
-    사용 예시:
-        # 직렬화
-        article = NewsArticle.objects.get(id=1)
-        serializer = NewsArticleSerializer(article)
-        json_data = serializer.data
-
-        # 소스 정보를 포함한 직렬화
-        serializer = NewsArticleSerializer(article, include_source=True)
-    """
+    """뉴스 기사 직렬화/검증 Serializer."""
 
     # 중첩된 소스 정보
     # ForeignKey 필드를 중첩된 객체로 표시합니다.
@@ -391,26 +305,41 @@ class NewsArticleSerializer(serializers.ModelSerializer):
         # 모든 검증 통과 시 검증된 데이터 딕셔너리 반환
         return data
 
+    def to_representation(self, instance):
+        """
+        소스별 article_count를 1회 배치 집계해
+        하위 source_detail 직렬화에서 재사용.
+        """
+        if "source_article_count_map" not in self.context:
+            parent_instance = getattr(getattr(self, "parent", None), "instance", None)
+            if parent_instance is not None:
+                source_ids = {
+                    obj.source_id
+                    for obj in parent_instance
+                    if getattr(obj, "source_id", None) is not None
+                }
+            else:
+                source_ids = (
+                    {instance.source_id} if instance.source_id is not None else set()
+                )
+
+            if source_ids:
+                rows = (
+                    NewsArticle.objects.filter(source_id__in=source_ids)
+                    .values("source_id")
+                    .annotate(total=Count("id"))
+                )
+                self.context["source_article_count_map"] = {
+                    row["source_id"]: row["total"] for row in rows
+                }
+            else:
+                self.context["source_article_count_map"] = {}
+
+        return super().to_representation(instance)
+
 
 class DataCollectionJobSerializer(serializers.ModelSerializer):
-    """
-    데이터 수집 작업 로그 Serializer
-
-    DataCollectionJob 모델을 JSON으로 변환합니다.
-    수집 작업 로그는 읽기 전용이므로 역직렬화는 지원하지 않습니다.
-
-    주요 기능:
-    - 수집 작업 로그 정보 직렬화
-    - 소스 정보 포함
-    - 작업 소요 시간 계산
-    - 상태 표시
-
-    사용 예시:
-        # 직렬화
-        job = DataCollectionJob.objects.get(id=1)
-        serializer = DataCollectionJobSerializer(job)
-        json_data = serializer.data
-    """
+    """수집 작업 로그 조회용(읽기 전용) Serializer."""
 
     # 소스 정보 (중첩) - GenericForeignKey에 맞게 수정
     source_detail = serializers.SerializerMethodField(
@@ -546,16 +475,7 @@ class DataCollectionJobSerializer(serializers.ModelSerializer):
 
 
 class SocialMediaSourceSerializer(serializers.ModelSerializer):
-    """
-    소셜 미디어 소스 Serializer
-
-    SocialMediaSource 모델을 JSON으로 변환하거나, JSON으로부터 SocialMediaSource 객체를 생성합니다.
-
-    주요 기능:
-    - 소셜 미디어 소스 정보 직렬화/역직렬화
-    - 수집된 게시물 개수 표시 (읽기 전용)
-    - 플랫폼별 검증
-    """
+    """소셜 미디어 소스 직렬화/검증 Serializer."""
 
     # 읽기 전용 필드: 수집된 게시물 개수
     post_count = serializers.IntegerField(
@@ -709,19 +629,21 @@ class SocialMediaSourceSerializer(serializers.ModelSerializer):
         """
         representation = super().to_representation(instance)
 
-        # 수집된 게시물 개수 추가
+        # 목록 직렬화에서는 parent serializer가 미리 계산한 맵을 사용해
+        # N+1을 방지합니다.
+        count_map = self.context.get("source_post_count_map")
+        if isinstance(count_map, dict):
+            representation["post_count"] = int(count_map.get(instance.id, 0))
+            return representation
+
+        # 단건 직렬화 등 맵이 없는 경우에만 fallback 조회
         representation["post_count"] = instance.posts.count()
 
         return representation
 
 
 class BaseSocialMediaPostSerializer(serializers.ModelSerializer):
-    """
-    소셜 미디어 게시물 기본 Serializer
-
-    공통 필드와 메서드를 정의합니다.
-    플랫폼별 시리얼라이저는 이 클래스를 상속받아 사용합니다.
-    """
+    """소셜 게시물 공통 필드용 기본 Serializer."""
 
     # 중첩된 소스 정보
     source_detail = SocialMediaSourceSerializer(
@@ -785,11 +707,39 @@ class BaseSocialMediaPostSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         """
+        소스별 post_count를 1회 배치 집계해
+        하위 source_detail 직렬화에서 재사용.
+
         썸네일 URL을 프록시 URL로 변환
 
         DC Inside 등 Referer가 필요한 이미지는 프록시를 통해 제공합니다.
         Reddit 이미지는 원본 URL을 그대로 사용합니다.
         """
+        if "source_post_count_map" not in self.context:
+            parent_instance = getattr(getattr(self, "parent", None), "instance", None)
+            if parent_instance is not None:
+                source_ids = {
+                    obj.source_id
+                    for obj in parent_instance
+                    if getattr(obj, "source_id", None) is not None
+                }
+            else:
+                source_ids = (
+                    {instance.source_id} if instance.source_id is not None else set()
+                )
+
+            if source_ids:
+                rows = (
+                    SocialMediaPost.objects.filter(source_id__in=source_ids)
+                    .values("source_id")
+                    .annotate(total=Count("id"))
+                )
+                self.context["source_post_count_map"] = {
+                    row["source_id"]: row["total"] for row in rows
+                }
+            else:
+                self.context["source_post_count_map"] = {}
+
         representation = super().to_representation(instance)
 
         thumbnail_url = representation.get("thumbnail_url")
@@ -823,11 +773,7 @@ class BaseSocialMediaPostSerializer(serializers.ModelSerializer):
 
 
 class RedditPostSerializer(BaseSocialMediaPostSerializer):
-    """
-    Reddit 게시물 Serializer
-
-    Reddit 플랫폼에 특화된 필드와 검증을 포함합니다.
-    """
+    """Reddit 게시물 전용 Serializer."""
 
     class Meta(BaseSocialMediaPostSerializer.Meta):
         fields = [
@@ -936,11 +882,7 @@ class RedditPostSerializer(BaseSocialMediaPostSerializer):
 
 
 class DCInsidePostSerializer(BaseSocialMediaPostSerializer):
-    """
-    DC Inside 게시물 Serializer
-
-    DC Inside 플랫폼에 특화된 필드와 검증을 포함합니다.
-    """
+    """DC Inside 게시물 전용 Serializer."""
 
     class Meta(BaseSocialMediaPostSerializer.Meta):
         fields = [

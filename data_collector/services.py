@@ -1,10 +1,3 @@
-"""
-데이터 수집 서비스 모듈
-
-이 모듈은 RSS 피드 수집을 위한 서비스 클래스를 제공합니다.
-클래스 기반 구조로 여러 뉴스 소스를 일관되게 처리할 수 있습니다.
-"""
-
 import csv
 import logging
 import os
@@ -47,61 +40,14 @@ from .translation_service import translation_service
 # 로거 설정
 logger = logging.getLogger(__name__)
 
-"""
-이 모듈은 다양한 소스에서 데이터를 수집하는 서비스 클래스들을 제공합니다.
-
-주요 클래스 및 기능:
-1. RSSCollectorService: RSS 피드 수집 서비스
-   - parse_feed(): RSS 피드 파싱
-   - collect_from_source(): 특정 소스에서 기사 수집
-   - collect(): 소스 ID/이름으로 수집
-   - create_source_from_rss(): RSS URL로 소스 생성
-
-2. NewsSourceCSVService: CSV 파일에서 뉴스 소스 일괄 생성
-   - load_sources_from_csv(): CSV 파일에서 NewsSource 생성/업데이트
-
-3. DCInsideCollectorService: DC Inside 갤러리 수집 서비스
-   - collect_from_source(): DC Inside 갤러리에서 게시글 수집
-
-4. RedditRSSCollectorService: Reddit RSS 피드 수집 서비스
-   - collect_from_source(): Reddit RSS 피드에서 게시글 수집
-   - _extract_reddit_content(): Reddit HTML에서 실제 내용 추출
-
-모든 서비스는 중복 방지, Rate Limiting, 실시간 통계 집계 등의 기능을 제공합니다.
-"""
+"""뉴스/소셜 데이터 수집 서비스 모듈."""
 
 
 class RSSCollectorService:
-    """
-    RSS 피드 수집 서비스 클래스
-
-    RSS 피드를 파싱하고 뉴스 기사를 수집하여 데이터베이스에 저장하는 서비스입니다.
-    Redis를 활용한 중복 방지, Rate Limiting, 통계 집계 등의 기능을 제공합니다.
-
-    주요 기능:
-    1. RSS 피드 파싱
-    2. 중복 수집 방지 (Redis)
-    3. Rate Limiting
-    4. 실시간 통계 집계
-    5. 수집 작업 로그 기록
-
-    사용 예시:
-        collector = RSSCollectorService()
-
-        # 특정 소스에서 수집
-        result = collector.collect(source_id=1)
-
-        # 또는 소스 객체 직접 전달
-        source = NewsSource.objects.get(name='경향신문')
-        result = collector.collect_from_source(source)
-    """
+    """RSS 피드 기반 뉴스 수집 서비스."""
 
     def __init__(self):
-        """
-        RSS 수집 서비스 초기화
-
-        Redis 서비스들을 초기화하고 로거를 설정합니다.
-        """
+        """수집 서비스 의존성 초기화."""
         self.duplicate_check = DuplicatePreventionService()
         self.rate_limit = RateLimitService()
         self.stats = RealtimeStatsService()
@@ -110,12 +56,6 @@ class RSSCollectorService:
     def _extract_text_from_html(self, html_content: str) -> str:
         """
         HTML 콘텐츠에서 순수 텍스트만 추출
-
-        Args:
-            html_content: HTML 형식의 문자열
-
-        Returns:
-            HTML 태그가 제거된 순수 텍스트
         """
         if not html_content or not html_content.strip():
             return ""
@@ -143,12 +83,6 @@ class RSSCollectorService:
     def _extract_image_from_html(self, html_content: str) -> Optional[str]:
         """
         HTML 콘텐츠에서 첫 번째 이미지 URL 추출
-
-        Args:
-            html_content: HTML 형식의 문자열
-
-        Returns:
-            이미지 URL 또는 None
         """
         if not html_content or not html_content.strip():
             return None
@@ -190,12 +124,6 @@ class RSSCollectorService:
     def _get_description_from_entry(self, entry) -> Tuple[str, Optional[str]]:
         """
         RSS entry에서 description 추출 (다중 소스 확인)
-
-        Args:
-            entry: feedparser entry 객체
-
-        Returns:
-            (description_text, thumbnail_url) 튜플
         """
         # 다중 소스에서 description 찾기
         raw_description = None
@@ -261,12 +189,6 @@ class RSSCollectorService:
     def _get_category_from_entry(self, entry) -> str:
         """
         RSS entry에서 category 추출 (다중 소스 확인)
-
-        Args:
-            entry: feedparser entry 객체
-
-        Returns:
-            category 문자열
         """
         # 다중 소스에서 category 찾기
         category = None
@@ -330,33 +252,7 @@ class RSSCollectorService:
         return category.strip() if category else ""
 
     def parse_feed(self, rss_url: str) -> List[Dict]:
-        """
-        RSS 피드를 파싱하여 기사 목록을 반환하는 메서드
-
-        feedparser 라이브러리를 사용하여 RSS/Atom 피드를 파싱하고,
-        각 기사 항목을 딕셔너리 형태로 변환합니다.
-
-        Args:
-            rss_url: RSS 피드 URL (예: 'https://www.khan.co.kr/rss/rssdata/total_news.xml')
-
-        Returns:
-            기사 정보 딕셔너리 리스트. 각 딕셔너리는 다음 키를 포함:
-            - title: 기사 제목
-            - link: 기사 URL
-            - description: 기사 설명/요약
-            - published: 발행 시간 (datetime 객체)
-            - author: 작성자
-            - category: 카테고리
-
-        예외 처리:
-            - 네트워크 오류, 파싱 오류 등이 발생하면 빈 리스트를 반환하고 로그를 기록합니다.
-
-        사용 예시:
-            collector = RSSCollectorService()
-            articles = collector.parse_feed('https://www.khan.co.kr/rss/rssdata/total_news.xml')
-            for article in articles:
-                print(article['title'])
-        """
+        """RSS/Atom 피드를 파싱해 기사 딕셔너리 목록을 반환."""
         try:
             feed = feedparser.parse(rss_url)
 
@@ -450,32 +346,7 @@ class RSSCollectorService:
             return []
 
     def collect_from_source(self, source: NewsSource) -> Dict:
-        """
-        특정 뉴스 소스에서 기사를 수집하는 메서드
-
-        NewsSource 객체를 받아서 해당 소스의 RSS 피드를 수집합니다.
-        중복 방지, Rate Limiting, 통계 집계 등의 기능을 모두 포함합니다.
-
-        Args:
-            source: NewsSource 모델 인스턴스
-
-        Returns:
-            수집 결과 딕셔너리:
-            {
-                'status': 'completed' | 'rate_limited' | 'failed',
-                'source': 소스 이름,
-                'items_collected': 수집된 기사 수,
-                'items_skipped': 건너뛴 기사 수,
-                'items_error': 오류 발생 기사 수,
-                'total_items': 전체 기사 수
-            }
-
-        사용 예시:
-            source = NewsSource.objects.get(name='경향신문')
-            collector = RSSCollectorService()
-            result = collector.collect_from_source(source)
-            print(f"수집 완료: {result['items_collected']}개")
-        """
+        """단일 NewsSource에서 기사 수집 후 요약 결과를 반환."""
         # 수집 작업 로그 생성
         job = None
         try:
@@ -699,31 +570,7 @@ class RSSCollectorService:
     def collect(
         self, source_id: Optional[int] = None, source_name: Optional[str] = None
     ) -> Dict:
-        """
-        뉴스 소스 ID 또는 이름으로 기사를 수집하는 메서드
-
-        source_id 또는 source_name으로 NewsSource를 조회한 후 수집을 진행합니다.
-        둘 다 None이면 활성화된 모든 RSS 소스를 수집합니다.
-
-        Args:
-            source_id: NewsSource 모델의 ID (선택)
-            source_name: NewsSource의 이름 (선택, 예: '경향신문')
-
-        Returns:
-            수집 결과 딕셔너리 또는 결과 리스트
-
-        사용 예시:
-            collector = RSSCollectorService()
-
-            # ID로 수집
-            result = collector.collect(source_id=1)
-
-            # 이름으로 수집
-            result = collector.collect(source_name='경향신문')
-
-            # 모든 활성화된 소스 수집
-            results = collector.collect()
-        """
+        """ID/이름/전체 활성 소스를 기준으로 RSS 수집 실행."""
         if source_id:
             # source_id로 소스 조회
             try:
@@ -780,32 +627,7 @@ class RSSCollectorService:
         is_active: bool = True,
         collection_interval: int = 60,
     ) -> Tuple[Optional[NewsSource], str, Dict]:
-        """
-        RSS URL로부터 NewsSource를 생성하는 메서드
-
-        RSS 피드를 파싱하여 소스 정보를 추출하고 NewsSource를 생성합니다.
-        이미 존재하는 URL인 경우 기존 소스를 반환합니다.
-
-        Args:
-            rss_url: RSS 피드 URL
-            name: 소스 이름 (선택, 없으면 자동 추출)
-            is_active: 활성화 여부 (기본값: True)
-            collection_interval: 수집 주기(분) (기본값: 60)
-
-        Returns:
-            (source, status, result_dict) 튜플:
-            - source: 생성된 또는 기존 NewsSource 객체 (실패 시 None)
-            - status: 'created' | 'exists' | 'error'
-            - result_dict: 상세 결과 딕셔너리
-
-        사용 예시:
-            collector = RSSCollectorService()
-            source, status, result = collector.create_source_from_rss(
-                'https://www.khan.co.kr/rss/rssdata/total_news.xml'
-            )
-            if status == 'created':
-                print(f"생성 완료: {str(source)}")
-        """
+        """RSS URL 기반으로 NewsSource를 생성/재사용."""
         try:
             # RSS 피드 파싱하여 정보 추출
             feed = feedparser.parse(rss_url)
@@ -875,40 +697,14 @@ class RSSCollectorService:
 
 
 class NewsSourceCSVService:
-    """
-    CSV 파일에서 NewsSource를 일괄 생성하는 서비스 클래스
-
-    CSV 파일을 읽어서 NewsSource 객체를 생성하거나 업데이트합니다.
-    중복 체크, 오류 처리, 상세한 결과 반환 등의 기능을 제공합니다.
-
-    사용 예시:
-        service = NewsSourceCSVService()
-        results = service.load_sources_from_csv('NewsSource_RSS.csv')
-        print(f"생성: {results['created']}개, 업데이트: {results['updated']}개")
-    """
+    """CSV 기반 NewsSource 일괄 생성/업데이트 서비스."""
 
     def __init__(self):
         """서비스 초기화"""
         self.logger = logging.getLogger(__name__)
 
     def load_sources_from_csv(self, csv_file_path: str = None) -> dict:
-        """
-        CSV 파일에서 NewsSource를 생성하는 메서드
-
-        Args:
-            csv_file_path: CSV 파일 경로 (None이면 기본 경로 사용)
-
-        Returns:
-            결과 딕셔너리:
-            {
-                'created': 생성된 소스 수,
-                'updated': 업데이트된 소스 수,
-                'skipped': 건너뛴 행 수,
-                'errors': 오류 발생 행 수,
-                'sources': 생성/업데이트된 소스 정보 리스트,
-                'error_details': 오류 상세 정보 리스트
-            }
-        """
+        """CSV 파일을 읽어 NewsSource를 생성/업데이트하고 집계 결과 반환."""
         results = {
             "created": 0,
             "updated": 0,
@@ -1064,30 +860,10 @@ class NewsSourceCSVService:
 
 
 class DCInsideCollectorService:
-    """
-    DC Inside 갤러리 수집 서비스 클래스
-
-    DC Inside 갤러리에서 게시글을 수집하여 데이터베이스에 저장하는 서비스입니다.
-    dcapi의 title_selenium을 사용하여 웹 스크래핑을 수행합니다.
-
-    주요 기능:
-    1. 갤러리 글 목록 수집 (dcapi.read.title_selenium)
-    2. 개별 게시글 상세 정보 수집 (dcapi.read.post)
-    3. 중복 수집 방지 (URL 기반)
-    4. 수집 작업 로그 기록
-
-    사용 예시:
-        collector = DCInsideCollectorService()
-        result = collector.collect_from_source(source_id=1)
-    """
+    """DC Inside 게시글 수집 서비스."""
 
     def __init__(self, headless: bool = True):
-        """
-        DC Inside 수집 서비스 초기화
-
-        Args:
-            headless: 브라우저를 백그라운드에서 실행할지 여부 (기본값: True)
-        """
+        """수집 옵션 초기화."""
         self.logger = logging.getLogger(__name__)
         self.headless = headless
 
@@ -1096,24 +872,7 @@ class DCInsideCollectorService:
         source: Optional[SocialMediaSource] = None,
         source_id: Optional[int] = None,
     ) -> Dict:
-        """
-        DC Inside 소스에서 게시글을 수집합니다.
-
-        Args:
-            source: SocialMediaSource 객체 (선택)
-            source_id: SocialMediaSource ID (선택)
-
-        Returns:
-            수집 결과 딕셔너리:
-            {
-                'status': 'success' | 'error',
-                'source': 소스 이름,
-                'items_collected': 수집된 게시글 수,
-                'items_skipped': 건너뛴 게시글 수,
-                'items_error': 오류 발생 게시글 수,
-                'error_message': 에러 메시지 (있는 경우)
-            }
-        """
+        """DC 소스에서 게시글을 수집하고 결과 집계를 반환."""
         # 소스 가져오기
         if source_id:
             try:
@@ -1196,7 +955,6 @@ class DCInsideCollectorService:
             time.sleep(random.uniform(0.5, 2.0))
 
             try:
-                # TROUBLESHOOTING.md 예제에 따르면 위치 인자로 전달
                 # selenium_title(gall_name, start_page, end_page, headless, reuse_driver)
                 posts = selenium_title(
                     gall_name,
@@ -1226,7 +984,6 @@ class DCInsideCollectorService:
                     "items_error": 0,
                 }
 
-            # 반환값 체크 (TROUBLESHOOTING.md 참고)
             if not posts:
                 error_msg = f"갤러리 '{gall_name}'에서 글 목록을 가져올 수 없습니다. (빈 딕셔너리 반환)"
                 self.logger.warning(error_msg)
@@ -1527,41 +1284,14 @@ class DCInsideCollectorService:
 
 
 class RedditRSSCollectorService:
-    """
-    Reddit RSS 피드 수집 서비스 클래스
-
-    Reddit RSS 피드를 파싱하여 게시글을 수집하여 데이터베이스에 저장하는 서비스입니다.
-    feedparser를 사용하여 RSS 피드를 파싱합니다.
-
-    주요 기능:
-    1. Reddit RSS 피드 파싱
-    2. 중복 수집 방지 (URL 기반)
-    3. 수집 작업 로그 기록
-
-    사용 예시:
-        collector = RedditRSSCollectorService()
-        result = collector.collect_from_source(source_id=1)
-    """
+    """Reddit RSS 게시글 수집 서비스."""
 
     def __init__(self):
         """Reddit RSS 수집 서비스 초기화"""
         self.logger = logging.getLogger(__name__)
 
     def _extract_reddit_content(self, html_content: str) -> str:
-        """
-        Reddit RSS content에서 실제 게시글 내용만 추출
-
-        Reddit RSS의 summary/description에는 다음과 같은 구조가 있습니다:
-        <!-- SC_OFF --><div class="md"><p>실제 게시글 내용</p></div><!-- SC_ON --> 메타데이터...
-
-        이 함수는 <div class="md"> 안의 내용만 추출하고, HTML 태그는 모두 제거하여 순수 텍스트만 반환합니다.
-
-        Args:
-            html_content: Reddit RSS에서 가져온 HTML 형식의 content
-
-        Returns:
-            추출된 실제 게시글 내용 (순수 텍스트만, HTML 태그 제거)
-        """
+        """Reddit RSS HTML에서 본문 텍스트만 추출."""
         if not html_content or not html_content.strip():
             return html_content
 
@@ -1601,24 +1331,7 @@ class RedditRSSCollectorService:
         source: Optional[SocialMediaSource] = None,
         source_id: Optional[int] = None,
     ) -> Dict:
-        """
-        Reddit RSS 소스에서 게시글을 수집합니다.
-
-        Args:
-            source: SocialMediaSource 객체 (선택)
-            source_id: SocialMediaSource ID (선택)
-
-        Returns:
-            수집 결과 딕셔너리:
-            {
-                'status': 'success' | 'error',
-                'source': 소스 이름,
-                'items_collected': 수집된 게시글 수,
-                'items_skipped': 건너뛴 게시글 수,
-                'items_error': 오류 발생 게시글 수,
-                'error_message': 에러 메시지 (있는 경우)
-            }
-        """
+        """Reddit 소스에서 게시글을 수집하고 결과 집계를 반환."""
         # 소스 가져오기
         if source_id:
             try:
