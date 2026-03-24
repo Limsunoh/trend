@@ -65,13 +65,6 @@ class MorphologicalAnalyzer:
         """
         형태소 분석기 초기화
 
-        Args:
-            model_type: KOMORAN 모델 타입 ("STABLE" 또는 "EXP")
-                - STABLE: 안정적인 모델 (기본값)
-                - EXP: 실험적 모델 (더 정확하지만 느릴 수 있음)
-            java_path: Java 실행 파일 경로 (선택사항)
-                - Java가 PATH에 없을 때만 지정
-                - 예: "C:\\Program Files\\Java\\jdk-11\\bin\\java.exe"
         """
         if not PYKOMORAN_AVAILABLE or Komoran is None:
             raise RuntimeError(
@@ -104,12 +97,6 @@ class MorphologicalAnalyzer:
         """
         텍스트를 형태소 분석
 
-        Args:
-            text: 분석할 텍스트
-
-        Returns:
-            형태소와 품사의 튜플 리스트
-            예: [('대한민국', 'NNP'), ('은', 'JX'), ('민주', 'NNP'), ...]
         """
         if not text or not text.strip():
             return []
@@ -134,11 +121,6 @@ class MorphologicalAnalyzer:
         """
         텍스트에서 명사만 추출
 
-        Args:
-            text: 분석할 텍스트
-
-        Returns:
-            명사 리스트
         """
         morphemes = self.analyze(text)
 
@@ -155,13 +137,6 @@ class MorphologicalAnalyzer:
         """
         텍스트에서 키워드(명사) 추출
 
-        Args:
-            text: 분석할 텍스트
-            min_length: 최소 글자 수 (기본값: 2)
-            exclude_stopwords: 불용어 제거 여부 (기본값: True)
-
-        Returns:
-            키워드 리스트
         """
         nouns = self.extract_nouns(text)
 
@@ -180,8 +155,6 @@ class MorphologicalAnalyzer:
 
         파일이 수정되었으면 캐시를 무효화하고 다시 로드합니다.
 
-        Returns:
-            불용어 집합
         """
         global _STOPWORDS_CACHE, _STOPWORDS_FILE_MTIME
 
@@ -251,11 +224,6 @@ class MorphologicalAnalyzer:
         """
         불용어 제거
 
-        Args:
-            words: 단어 리스트
-
-        Returns:
-            불용어가 제거된 단어 리스트
         """
         stopwords = self._load_stopwords()
         return [word for word in words if word not in stopwords]
@@ -266,13 +234,6 @@ class MorphologicalAnalyzer:
         """
         여러 텍스트에서 키워드 빈도 계산
 
-        Args:
-            texts: 텍스트 리스트
-            min_length: 최소 글자 수
-            exclude_stopwords: 불용어 제거 여부
-
-        Returns:
-            키워드와 빈도의 딕셔너리 (절대 빈도)
         """
         all_keywords = []
 
@@ -295,11 +256,6 @@ class MorphologicalAnalyzer:
         플랫폼별 데이터 규모 차이를 보정하기 위해 상대 빈도로 변환합니다.
         상대 빈도 = 절대 빈도 / 전체 단어 수
 
-        Args:
-            frequency: 키워드와 절대 빈도의 딕셔너리
-
-        Returns:
-            키워드와 상대 빈도의 딕셔너리 (0.0 ~ 1.0 범위)
         """
         if not frequency:
             return {}
@@ -317,13 +273,6 @@ class MorphologicalAnalyzer:
         """
         여러 텍스트에서 키워드 빈도를 계산하고 상대 빈도로 정규화
 
-        Args:
-            texts: 텍스트 리스트
-            min_length: 최소 글자 수
-            exclude_stopwords: 불용어 제거 여부
-
-        Returns:
-            키워드와 상대 빈도의 딕셔너리 (0.0 ~ 1.0 범위)
         """
         # 절대 빈도 계산
         absolute_frequency = self.get_keyword_frequency(
@@ -346,12 +295,6 @@ def get_analyzer(
     """
     형태소 분석기 싱글톤 인스턴스 반환
 
-    Args:
-        model_type: KOMORAN 모델 타입 ("STABLE" 또는 "EXP")
-        java_path: Java 실행 파일 경로 (선택사항)
-
-    Returns:
-        MorphologicalAnalyzer 인스턴스
     """
     if not PYKOMORAN_AVAILABLE:
         raise RuntimeError(
@@ -373,11 +316,6 @@ def extract_text_from_news_article(article) -> str:
     """
     NewsArticle 객체에서 분석할 텍스트 추출
 
-    Args:
-        article: NewsArticle 모델 인스턴스
-
-    Returns:
-        분석할 텍스트 (title + description)
     """
     # 제목 + 요약을 합쳐 분석 텍스트 생성
     text = article.title or ""
@@ -390,11 +328,6 @@ def extract_text_from_sns_post(post) -> str:
     """
     SocialMediaPost 객체에서 분석할 텍스트 추출
 
-    Args:
-        post: SocialMediaPost 모델 인스턴스
-
-    Returns:
-        분석할 텍스트 (title + content)
     """
     # 제목 + 본문을 합쳐 분석 텍스트 생성
     text = post.title or ""
@@ -419,23 +352,6 @@ def analyze_news_articles(
     3. 형태소 분석을 통해 키워드를 추출합니다
     4. 절대 빈도를 계산합니다
     5. 상대 빈도로 정규화합니다
-
-    Args:
-        queryset: NewsArticle QuerySet (None이면 최근 N일간 자동 조회)
-        days: 최근 며칠간의 데이터를 분석할지 (queryset이 None일 때만 사용)
-        min_length: 최소 글자 수 (기본값: 2)
-        exclude_stopwords: 불용어 제거 여부 (기본값: True)
-        top_n: 상위 N개 키워드만 반환 (None이면 전체)
-
-    Returns:
-        분석 결과 딕셔너리:
-        {
-            'total_articles': 분석한 기사 수,
-            'total_keywords': 추출된 키워드 종류 수,
-            'absolute_frequency': 절대 빈도 딕셔너리,
-            'normalized_frequency': 상대 빈도 딕셔너리 (0.0~1.0),
-            'top_keywords': 상위 키워드 리스트 (top_n 지정 시)
-        }
 
     사용 예시:
         # 최근 7일간의 뉴스 분석
@@ -521,23 +437,6 @@ def analyze_sns_posts(
     4. 절대 빈도를 계산합니다
     5. 상대 빈도로 정규화합니다
 
-    Args:
-        queryset: SocialMediaPost QuerySet (None이면 최근 N일간 자동 조회)
-        days: 최근 며칠간의 데이터를 분석할지 (queryset이 None일 때만 사용)
-        min_length: 최소 글자 수 (기본값: 2)
-        exclude_stopwords: 불용어 제거 여부 (기본값: True)
-        top_n: 상위 N개 키워드만 반환 (None이면 전체)
-
-    Returns:
-        분석 결과 딕셔너리:
-        {
-            'total_posts': 분석한 게시물 수,
-            'total_keywords': 추출된 키워드 종류 수,
-            'absolute_frequency': 절대 빈도 딕셔너리,
-            'normalized_frequency': 상대 빈도 딕셔너리 (0.0~1.0),
-            'top_keywords': 상위 키워드 리스트 (top_n 지정 시)
-        }
-
     사용 예시:
         # 최근 7일간의 SNS 게시물 분석
         result = analyze_sns_posts(days=7)
@@ -620,26 +519,6 @@ def compare_platforms(
     2. 공통 키워드를 찾습니다
     3. 플랫폼별 빈도를 비교합니다
     4. 뉴스에만 있는 키워드, SNS에만 있는 키워드를 구분합니다
-
-    Args:
-        news_queryset: NewsArticle QuerySet (None이면 최근 N일간 자동 조회)
-        sns_queryset: SocialMediaPost QuerySet (None이면 최근 N일간 자동 조회)
-        days: 최근 며칠간의 데이터를 분석할지
-        min_length: 최소 글자 수
-        exclude_stopwords: 불용어 제거 여부
-        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
-        top_n: 상위 N개 공통 키워드만 반환 (None이면 전체)
-
-    Returns:
-        비교 분석 결과 딕셔너리:
-        {
-            'news': 뉴스 분석 결과,
-            'sns': SNS 분석 결과,
-            'common_keywords': 공통 키워드 비교 리스트,
-            'news_only': 뉴스에만 있는 키워드,
-            'sns_only': SNS에만 있는 키워드,
-            'summary': 요약 통계
-        }
 
     사용 예시:
         # 최근 7일간 비교
@@ -760,20 +639,6 @@ def analyze_time_lag(
     3. 전파 방향을 판단합니다 (뉴스 → SNS 또는 SNS → 뉴스)
     4. 통계를 집계합니다
 
-    Args:
-        keywords: 분석할 키워드 리스트 (None이면 compare_platforms로 공통 키워드 추출)
-        days: 최근 며칠간의 데이터를 분석할지
-        min_frequency: 최소 상대 빈도 (키워드 추출 시 사용)
-        top_n: 상위 N개 키워드만 분석 (None이면 전체)
-        news_queryset: 뉴스 QuerySet (선택적)
-        sns_queryset: SNS QuerySet (선택적)
-
-    Returns:
-        {
-            'keywords': 키워드별 분석 결과 리스트,
-            'statistics': 통계 정보,
-            'timeline_data': 타임라인 시각화용 데이터 (선택적)
-        }
     """
     # 키워드 리스트 준비
     if keywords is None:
@@ -978,22 +843,6 @@ def detect_surge_keywords(
 
     시간대별 키워드 빈도를 비교하여 급격히 증가한 키워드를 찾습니다.
 
-    Args:
-        platform: 분석할 플랫폼 ('news', 'sns', 'both')
-        days: 최근 며칠간의 데이터를 분석할지
-        interval_hours: 시간대별 집계 간격 (시간 단위)
-        surge_threshold: 급상승 임계값 (이전 시간대 대비 배수, 기본값: 2.0 = 2배)
-        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
-        top_n: 상위 N개 급상승 키워드만 반환 (None이면 전체)
-        news_queryset: 뉴스 QuerySet (선택적)
-        sns_queryset: SNS QuerySet (선택적)
-
-    Returns:
-        {
-            'news_surge_keywords': 뉴스 급상승 키워드 리스트,
-            'sns_surge_keywords': SNS 급상승 키워드 리스트,
-            'summary': 요약 통계
-        }
     """
     # QuerySet 준비
     start_date = timezone.now() - timedelta(days=days)
@@ -1206,21 +1055,6 @@ def analyze_trend_synchronization(
 
     시간대별 키워드 빈도 변화 패턴을 비교하여 두 플랫폼이 얼마나 동기화되어 있는지 측정합니다.
 
-    Args:
-        days: 최근 며칠간의 데이터를 분석할지
-        interval_hours: 시간대별 집계 간격 (시간 단위)
-        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
-        top_n: 상위 N개 키워드만 분석 (None이면 전체)
-        news_queryset: 뉴스 QuerySet (선택적)
-        sns_queryset: SNS QuerySet (선택적)
-
-    Returns:
-        {
-            'synchronized_keywords': 동기화된 키워드 리스트 (상관관계 높음),
-            'desynchronized_keywords': 비동기화된 키워드 리스트 (상관관계 낮음),
-            'correlation_scores': 키워드별 상관관계 점수,
-            'summary': 요약 통계
-        }
     """
     # QuerySet 준비
     start_date = timezone.now() - timedelta(days=days)
@@ -1431,20 +1265,6 @@ def analyze_hourly_trends(
 
     시간대(0시~23시)별로 키워드 빈도 변화를 분석하여 시간대별 트렌드 패턴을 파악합니다.
 
-    Args:
-        platform: 분석할 플랫폼 ('news', 'sns', 'both')
-        days: 최근 며칠간의 데이터를 분석할지
-        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
-        top_n: 시간대별 상위 N개 키워드만 반환 (None이면 전체)
-        news_queryset: 뉴스 QuerySet (선택적)
-        sns_queryset: SNS QuerySet (선택적)
-
-    Returns:
-        {
-            'news_hourly_trends': 뉴스 시간대별 트렌드,
-            'sns_hourly_trends': SNS 시간대별 트렌드,
-            'summary': 요약 통계
-        }
     """
     # QuerySet 준비
     start_date = timezone.now() - timedelta(days=days)
@@ -1593,21 +1413,6 @@ def analyze_engagement_keywords(
     SNS 게시물의 참여도 메트릭(조회수, 댓글수, 좋아요수, 공유수)을 활용하여
     실제 반응이 높은 키워드를 식별합니다.
 
-    Args:
-        days: 최근 며칠간의 데이터를 분석할지
-        min_frequency: 최소 상대 빈도 (이 값보다 작은 키워드는 제외)
-        top_n: 상위 N개 키워드만 반환 (None이면 전체)
-        engagement_weights: 참여도 가중치 딕셔너리
-            - 기본값: {'views': 0.1, 'comments': 0.3, 'likes': 0.4, 'shares': 0.2}
-            - 각 메트릭의 중요도를 조정할 수 있음
-        sns_queryset: SNS QuerySet (선택적)
-
-    Returns:
-        {
-            'engagement_keywords': 참여도 기반 키워드 리스트,
-            'viral_keywords': 바이럴 키워드 리스트 (참여도 급상승),
-            'summary': 요약 통계
-        }
     """
     # QuerySet 준비
     start_date = timezone.now() - timedelta(days=days)
