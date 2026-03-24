@@ -69,6 +69,8 @@ reports/
 
 # 로컬 트러블슈팅·N+1 측정 (md/py/출력물 — 레포에 포함하지 않음)
 TROUBLESHOOTING/
+DB_QUERY_OPTIMIZATION.md
+CLOUDWATCH_LOGS.md
 
 nul
 
