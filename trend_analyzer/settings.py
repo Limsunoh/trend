@@ -7,6 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import sentry_sdk
+from celery.schedules import crontab
 from dotenv import load_dotenv
 from sentry_sdk.integrations.django import DjangoIntegration
 
@@ -307,6 +308,15 @@ CELERY_BEAT_SCHEDULE = {
             "limit": 5000,
         },
         "options": {"queue": "embedding"},
+    },
+    # 수집/분석 데이터 보관정리: 기본 12일 보관, 매일 03:00 실행
+    "cleanup-old-data-daily": {
+        "task": "data_collector.tasks.cleanup_old_data_task",
+        "schedule": crontab(hour=3, minute=0),
+        "kwargs": {
+            "retention_days": int(os.getenv("DATA_RETENTION_DAYS", "12")),
+            "dry_run": False,
+        },
     },
 }
 
