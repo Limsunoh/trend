@@ -66,7 +66,8 @@ class VectorDBService:
             settings=ChromaSettings(anonymized_telemetry=False),
         )
         self.collection = self.client.get_or_create_collection(
-            name=self.collection_name
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
         )
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
@@ -98,7 +99,7 @@ class VectorDBService:
         self,
         query_text: str,
         top_k: int = 5,
-        distance_threshold: float = 0.15,
+        distance_threshold: float = 0.10,
         fetch_multiplier: int = 2,
         *,
         balance_types: bool = True,  # ✅ 추가
@@ -316,6 +317,33 @@ def _extract_key_entities(query_text: str) -> List[str]:
         "변화",
         "영향",
         "결과",
+        # 감정/상태 표현 (엔티티가 아닌 일반 감성어)
+        "불안",
+        "불안해",
+        "불안한",
+        "걱정",
+        "걱정돼",
+        "무서워",
+        "답답",
+        "답답해",
+        "짜증",
+        "화나",
+        "힘들",
+        "미치",
+        "미치겠",
+        "심각",
+        "심각해",
+        "궁금",
+        "궁금해",
+        "좋은",
+        "나쁜",
+        "안좋",
+        # 의문/탐색 표현 (엔티티가 아닌 질문 구성어)
+        "무슨일",
+        "어쩌다",
+        "어떡해",
+        "어쩌면",
+        "뭐야",
     }
 
     # 1. 공백 기준 토큰 분리 → 조사 제거 → 엔티티 판별
@@ -479,6 +507,63 @@ def _tokens_ko_simple(s: str) -> set[str]:
                     break
         toks.add(stripped)
     return toks - _STOP_TOKENS
+
+
+def _expand_query_for_search(query_text: str, key_entities: List[str]) -> List[str]:
+    """
+    구어체 쿼리를 뉴스 문체 변형으로 확장.
+    LLM 호출 없이 패턴 기반으로 생성하여 시맨틱 검색 커버리지 향상.
+    """
+    expanded = [query_text]
+    q_lower = query_text.lower()
+
+    if not key_entities:
+        return expanded
+
+    entity_str = " ".join(key_entities[:3])
+
+    if any(kw in q_lower for kw in ["어떻게", "어떤", "어때"]):
+        expanded.append(f"{entity_str} 현황 전망")
+    if any(kw in q_lower for kw in ["주가", "주식", "증시"]):
+        expanded.append(f"{entity_str} 실적 증시 시장")
+    if any(kw in q_lower for kw in ["반응", "여론", "의견"]):
+        expanded.append(f"{entity_str} 평가 영향 분석")
+    if any(kw in q_lower for kw in ["정책", "법", "제도"]):
+        expanded.append(f"{entity_str} 법안 제도 시행")
+
+    # 기본: 엔티티 + "뉴스" (뉴스 헤드라인 스타일 매칭)
+    if len(expanded) == 1:
+        expanded.append(f"{entity_str} 뉴스")
+
+    # 국가 미지정 시 "한국" 변형 추가 → 한국 콘텐츠 우선 검색
+    _country_names = {
+        "한국",
+        "미국",
+        "일본",
+        "중국",
+        "영국",
+        "독일",
+        "프랑스",
+        "러시아",
+        "북한",
+        "대만",
+        "호주",
+        "캐나다",
+        "인도",
+        "이란",
+        "이스라엘",
+        "korea",
+        "usa",
+        "us",
+        "japan",
+        "china",
+        "uk",
+    }
+    has_country = any(c in q_lower for c in _country_names)
+    if not has_country:
+        expanded.append(f"한국 {entity_str}")
+
+    return expanded[:4]
 
 
 def _keyword_overlap_count(query: str, text: str) -> int:
@@ -667,6 +752,7 @@ POPULARITY_WORDS = [
     "주목",
     "난리",
     "대박",
+    "이슈",
 ]
 
 # 탐색적 트렌드 신호 단어: 특정 주제 없는 탐색적 쿼리에서 trend_enhanced 라우팅
@@ -683,6 +769,13 @@ TREND_SIGNAL_WORDS = [
     "궁금",
     "요즘",
     "대충",
+    "놓친",
+    "못본",
+    "못 본",
+    "빠진",
+    "주요",
+    "중요한",
+    "핵심",
 ]
 
 # 키워드 수식어: "키워드" 앞에 붙어서 분석 의도를 나타내는 단어
@@ -1354,6 +1447,34 @@ def _extract_topic_from_query(query_text: str) -> List[str]:
             "없지",
             "됐어",
             "했어",
+            # 감정/상태 표현 (주제가 아닌 수식어)
+            "불안",
+            "불안해",
+            "불안한",
+            "걱정",
+            "걱정돼",
+            "무서워",
+            "답답",
+            "답답해",
+            "짜증",
+            "화나",
+            "힘들",
+            "미치겠",
+            "심각",
+            "심각해",
+            "궁금",
+            "궁금해",
+            "안좋",
+            "나쁜",
+            "좋은",
+            # 의문/탐색 표현 (질문 구성어)
+            "무슨일",
+            "무슨일이",
+            "어쩌다",
+            "어떡해",
+            "어쩌면",
+            "진짜",
+            "너무",
             # 조사·어미·기능어
             "에",
             "은",
@@ -1388,11 +1509,39 @@ def _extract_topic_from_query(query_text: str) -> List[str]:
     )
 
     # 토큰 분리 후 노이즈 제거
+    # 동사 어미도 제거 (조사 제거만으로는 "무슨일이야" → "무슨일" 변환 불가)
+    _topic_verb_suffixes = [
+        "이야",
+        "인가",
+        "일까",
+        "인지",
+        "인데",
+        "이냐",
+        "해줘",
+        "해봐",
+        "할까",
+        "했어",
+        "하는",
+        "한다",
+        "뭐야",
+        "뭐냐",
+        "뭐임",
+        "있어",
+        "있나",
+        "없어",
+        "줘",
+        "해",
+    ]
     tokens = q.split()
     topics = []
     for token in tokens:
         # 조사 제거
         cleaned = _strip_ko_particles(token)
+        # 동사 어미 제거 (긴 접미사부터 매칭)
+        for suf in _topic_verb_suffixes:
+            if cleaned.endswith(suf) and len(cleaned) > len(suf) + 1:
+                cleaned = cleaned[: -len(suf)]
+                break
         if cleaned.lower() in _noise_words or len(cleaned) < 2:
             continue
         # 영문은 그대로
@@ -1734,24 +1883,56 @@ def _get_trending_keywords_by_topic(
     return keywords, summary_text
 
 
-def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
+def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> "tuple":
     """
-    쿼리의 시간 범위를 일(day) 단위로 반환.
-    0 = 시간 제약 없음, N = 최근 N일 이내 문서 우선/필터.
+    쿼리의 시간 범위를 (range_start_dt, range_end_dt, scope_days) 튜플로 반환.
+    - range_start_dt: datetime(KST) 범위 시작 (inclusive), None=제약없음
+    - range_end_dt:   datetime(KST) 범위 끝 (exclusive), None=현재까지
+    - scope_days:     int 근사 범위 (recency 가중치용), 0=제약없음
 
-    예: "오늘 이슈" → 1, "최근 뉴스" → 7, "요즘 핫한" → 14
+    KST 자정 기준으로 캘린더 일 경계 사용.
+    예: "어제" → (어제00:00 KST, 오늘00:00 KST, 2) → 어제 하루만
     """
+    from datetime import datetime, timedelta, timezone
+
+    KST = timezone(timedelta(hours=9))
+    now_kst = datetime.now(KST)
+    today_midnight = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+
     q = (query_text or "").strip().lower()
+
+    # 특정 날짜 패턴: "3월 16일", "3/16", "03월 16일" 등
+    import re as _re
+
+    _date_match = _re.search(r"(\d{1,2})\s*[월/\.]\s*(\d{1,2})\s*일?", q)
+    if _date_match:
+        month = int(_date_match.group(1))
+        day = int(_date_match.group(2))
+        year = now_kst.year
+        try:
+            target = today_midnight.replace(month=month, day=day)
+            # 미래 날짜면 작년으로
+            if target > now_kst:
+                target = target.replace(year=year - 1)
+            return (target, target + timedelta(days=1), 1)
+        except ValueError:
+            pass  # 잘못된 날짜(2월 30일 등)는 무시
 
     # 강한 시간 신호 (좁은 범위)
     if any(kw in q for kw in ["오늘", "today", "방금", "지금"]):
-        return 1
+        return (today_midnight, None, 1)
     if any(kw in q for kw in ["어제", "yesterday"]):
-        return 2
+        return (today_midnight - timedelta(days=1), today_midnight, 2)
     if any(kw in q for kw in ["이번주", "이번 주", "금주"]):
-        return 7
+        # 이번주 월요일 00:00 KST ~ 현재
+        weekday = today_midnight.weekday()  # 0=월
+        this_week_start = today_midnight - timedelta(days=weekday)
+        return (this_week_start, None, 7)
     if any(kw in q for kw in ["지난주", "저번주", "저번 주", "지난 주"]):
-        return 14
+        weekday = today_midnight.weekday()
+        this_week_start = today_midnight - timedelta(days=weekday)
+        last_week_start = this_week_start - timedelta(days=7)
+        return (last_week_start, this_week_start, 14)
 
     # 중간 시간 신호
     if any(
@@ -1770,19 +1951,22 @@ def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
             "떠오르는",
         ]
     ):
-        return 14
+        return (today_midnight - timedelta(days=14), None, 14)
     if any(kw in q for kw in ["이번달", "이번 달", "금월"]):
-        return 30
+        this_month_start = today_midnight.replace(day=1)
+        return (this_month_start, None, 30)
     if any(kw in q for kw in ["지난달", "저번달", "저번 달", "지난 달"]):
-        return 60
+        this_month_start = today_midnight.replace(day=1)
+        last_month_start = (this_month_start - timedelta(days=1)).replace(day=1)
+        return (last_month_start, this_month_start, 60)
 
     # intent_info의 time_focus 활용
     if intent_time_focus == "recent":
-        return 14
+        return (today_midnight - timedelta(days=14), None, 14)
     if intent_time_focus == "current":
-        return 30
+        return (today_midnight - timedelta(days=30), None, 30)
 
-    return 0
+    return (None, None, 0)
 
 
 def _recency_score(published_at: str, now_ts: float) -> float:
@@ -2231,7 +2415,11 @@ class OpenAIResponsesLLM:
             "6. 한국어 존댓말(~합니다, ~있습니다)로 작성하세요.\n"
             "7. 완전한 문장으로 끝내세요. 추가 질문이나 제안은 붙이지 마세요.\n"
             "8. 뉴스와 커뮤니티 간 비교·대조를 요청받았을 때, CONTEXT에 양쪽 자료가 모두 있으면 "
-            "각 출처의 관점 차이를 설명하세요. 한쪽 자료만 있으면 비교가 불가능하다고 답변하세요."
+            "각 출처의 관점 차이를 설명하세요. 한쪽 자료만 있으면 비교가 불가능하다고 답변하세요.\n"
+            "9. 이 서비스는 한국 사용자를 위한 서비스입니다. 질문에 특정 국가가 명시되지 않으면 "
+            "한국 기준으로 답변하세요. CONTEXT에 한국 관련 자료와 다른 나라 자료가 섞여 있으면 "
+            "한국 관련 자료를 우선하여 답변하세요. CONTEXT에 한국 관련 자료가 없고 다른 나라 자료만 있으면 "
+            "해당 주제에 대한 한국 정보가 없다고 답변하세요. 다른 나라 정보로 대체하지 마세요."
         )
         if instructions:
             system_prompt += f"\n\n[추가 지시사항]\n{instructions}"
@@ -2245,11 +2433,44 @@ class OpenAIResponsesLLM:
         if context_length < 50:
             logger.warning(f"[LLM 프롬프트] CONTEXT가 너무 짧음 ({context_length}자)")
 
+        # 국가 미지정 시 한국 기준 안내를 질문에 직접 첨부
+        _q_lower_llm = query_text.lower()
+        _country_mentioned = any(
+            c in _q_lower_llm
+            for c in [
+                "한국",
+                "미국",
+                "일본",
+                "중국",
+                "영국",
+                "독일",
+                "프랑스",
+                "러시아",
+                "북한",
+                "대만",
+                "호주",
+                "캐나다",
+                "인도",
+                "이란",
+                "korea",
+                "usa",
+                "japan",
+                "china",
+                "uk",
+            ]
+        )
+        _korea_hint = (
+            "\n(특정 국가가 명시되지 않았으므로 한국 기준으로 답변하세요. "
+            "CONTEXT에 한국 자료가 없으면 해당 정보가 없다고 답변하세요.)"
+            if not _country_mentioned
+            else ""
+        )
+
         user_prompt = (
             f"[CONTEXT]\n{context}\n\n"
             f"---\n\n"
             f"위 CONTEXT만을 근거로 다음 질문에 답변하세요.\n"
-            f"[질문] {query_text}"
+            f"[질문] {query_text}{_korea_hint}"
         )
         logger.debug(f"[LLM 프롬프트] 전체 프롬프트 길이={len(user_prompt)}")
 
@@ -2848,6 +3069,7 @@ class RAGService:
                 "sources": [{"type": "analysis", "title": "시스템 설명"}],
                 "query": query_text,
                 "history_id": history_id,
+                "model": final_model,
             }
 
         if source_intent == "analysis":
@@ -2895,6 +3117,7 @@ class RAGService:
                     "sources": analysis_sources,
                     "query": query_text,
                     "history_id": history_id,
+                    "model": final_model,
                 }
             else:
                 logger.info("[RAG 분석] 분석 결과 없음, 일반 검색으로 fallback")
@@ -2918,7 +3141,7 @@ class RAGService:
                 compound_candidates = self.vector_db.similarity_search(
                     search_query_for_compound,
                     top_k=retrieval_k,
-                    distance_threshold=1.5,
+                    distance_threshold=0.75,
                     fetch_multiplier=3,
                     balance_types=False,
                 )
@@ -3016,6 +3239,7 @@ class RAGService:
                         "sources": combined_sources,
                         "query": query_text,
                         "history_id": history_id,
+                        "model": final_model,
                     }
 
             # 분석 키워드 추출 실패 시 분석 결과만으로 응답 (fallback)
@@ -3050,6 +3274,7 @@ class RAGService:
                     "sources": analysis_sources,
                     "query": query_text,
                     "history_id": history_id,
+                    "model": final_model,
                 }
 
             # 분석 결과도 없으면 일반 검색으로 fallback
@@ -3097,7 +3322,7 @@ class RAGService:
                 trend_candidates = self.vector_db.similarity_search(
                     trend_search_query,
                     top_k=retrieval_k,
-                    distance_threshold=1.5,
+                    distance_threshold=0.75,
                     fetch_multiplier=3,
                     balance_types=False,
                 )
@@ -3156,17 +3381,14 @@ class RAGService:
                     min_keyword_hits=1,
                 )
 
-                # 시간 필터 (일반 파이프라인과 동일)
-                _trend_time_scope = _detect_time_scope(
+                # 시간 필터 (일반 파이프라인과 동일 - KST 캘린더 범위)
+                _t_range_start, _t_range_end, _t_scope = _detect_time_scope(
                     query_text,
                     intent_time_focus=intent_info.get("time_focus", ""),
                 )
-                if _trend_time_scope > 0:
-                    from datetime import datetime, timedelta, timezone
+                if _t_range_start is not None:
+                    from datetime import datetime, timezone
 
-                    _trend_cutoff = datetime.now(timezone.utc) - timedelta(
-                        days=_trend_time_scope
-                    )
                     _trend_recent = []
                     for r in merged:
                         pa = (r.metadata or {}).get("published_at", "")
@@ -3175,13 +3397,19 @@ class RAGService:
                                 doc_dt = datetime.fromisoformat(pa)
                                 if doc_dt.tzinfo is None:
                                     doc_dt = doc_dt.replace(tzinfo=timezone.utc)
-                                if doc_dt >= _trend_cutoff:
-                                    _trend_recent.append(r)
+                                if doc_dt >= _t_range_start:
+                                    if _t_range_end is None or doc_dt < _t_range_end:
+                                        _trend_recent.append(r)
                             except (ValueError, TypeError):
                                 pass
+                    _scope_lbl = (
+                        f"{_t_range_start.strftime('%m/%d')}~{_t_range_end.strftime('%m/%d')}"
+                        if _t_range_end
+                        else f"{_t_range_start.strftime('%m/%d')}~현재"
+                    )
                     if _trend_recent:
                         logger.info(
-                            f"[RAG 트렌드 시간필터] {_trend_time_scope}일 이내: "
+                            f"[RAG 트렌드 시간필터] {_scope_lbl}: "
                             f"{len(_trend_recent)}개 (전체 {len(merged)}개에서 필터)"
                         )
                         merged = _trend_recent
@@ -3192,7 +3420,7 @@ class RAGService:
                             reverse=True,
                         )
                         logger.info(
-                            f"[RAG 트렌드 시간필터] {_trend_time_scope}일 이내 결과 없음, "
+                            f"[RAG 트렌드 시간필터] {_scope_lbl} 결과 없음, "
                             f"전체 {len(merged)}개를 시간순 정렬"
                         )
 
@@ -3288,6 +3516,7 @@ class RAGService:
                         "sources": combined_sources,
                         "query": query_text,
                         "history_id": history_id,
+                        "model": final_model,
                     }
 
             # 트렌드 키워드로 적절한 결과를 못 찾음 → 원래 의도로 fallback
@@ -3344,17 +3573,29 @@ class RAGService:
 
         retrieval_k = max(int(top_k) * 8, int(top_k) + 30)
         candidate_distance_threshold = float(
-            _get_setting("RAG_CANDIDATE_DISTANCE_THRESHOLD", 1.5)
+            _get_setting("RAG_CANDIDATE_DISTANCE_THRESHOLD", 0.75)
         )
 
-        semantic_candidates = self.vector_db.similarity_search(
-            search_query,
-            top_k=retrieval_k,
-            distance_threshold=candidate_distance_threshold,
-            fetch_multiplier=3,
-            balance_types=False,
+        expanded_queries = _expand_query_for_search(search_query, key_entities)
+        logger.info(f"[RAG 검색] 쿼리 확장: {expanded_queries}")
+
+        semantic_candidates = []
+        seen_semantic_ids: set = set()
+        for eq in expanded_queries:
+            eq_results = self.vector_db.similarity_search(
+                eq,
+                top_k=retrieval_k,
+                distance_threshold=candidate_distance_threshold,
+                fetch_multiplier=3,
+                balance_types=False,
+            )
+            for r in eq_results:
+                if r.id not in seen_semantic_ids:
+                    seen_semantic_ids.add(r.id)
+                    semantic_candidates.append(r)
+        logger.info(
+            f"[RAG 검색] 시맨틱 검색 결과: {len(semantic_candidates)}개 (쿼리 {len(expanded_queries)}개)"
         )
-        logger.info(f"[RAG 검색] 시맨틱 검색 결과: {len(semantic_candidates)}개")
 
         # 3) 키워드 검색 (후보군 B) - 엔티티가 있을 때만
         keyword_candidates: List[SearchResult] = []
@@ -3417,11 +3658,137 @@ class RAGService:
                 "answer": f"'{query_text}'에 대한 관련 정보를 찾을 수 없습니다. 다른 키워드로 검색해보세요.",
                 "sources": [],
                 "query": query_text,
+                "model": final_model,
             }
 
         # ========================================
-        # STEP -1: 극도로 모호한 질문 조기 거부
+        # STEP -1: 극도로 모호한 질문 / 대화형 후속 질문 조기 거부
         # ========================================
+        _q_lower = query_text.strip().lower()
+
+        # (A-0) 시스템 메타 질문 감지 ("너 누구야?", "뭘 할 수 있어?" 등)
+        _meta_patterns = [
+            "너 누구",
+            "넌 누구",
+            "당신은 누구",
+            "뭘 할 수 있",
+            "뭐 할 수 있",
+            "무엇을 할 수",
+            "어떤 기능",
+            "사용법",
+            "사용 방법",
+            "어떻게 써",
+            "어떻게 사용",
+        ]
+        if any(p in _q_lower for p in _meta_patterns):
+            return {
+                "answer": (
+                    "저는 뉴스와 커뮤니티 트렌드 데이터를 기반으로 답변하는 "
+                    "Q&A 어시스턴트입니다.\n\n"
+                    "다음과 같은 질문에 답변할 수 있습니다:\n"
+                    '- 최신 뉴스 요약 (예: "오늘 주요 뉴스 알려줘")\n'
+                    '- 특정 주제 검색 (예: "AI 관련 최신 소식")\n'
+                    '- 커뮤니티 반응 (예: "레딧에서 한국에 대해 뭐라고 해?")\n'
+                    '- 트렌드 분석 (예: "요즘 가장 많이 언급된 키워드")'
+                ),
+                "sources": [],
+                "query": query_text,
+                "model": final_model,
+            }
+
+        # (A) 대화형 후속 질문 감지 (이전 답변 참조형)
+        # "그거 믿어도 돼?", "출처가 어디야?", "더 자세히", "요약해줘" 등
+        # 검색 가능한 주제(엔티티)가 없는 대화형 질문
+        _followup_patterns = [
+            "믿어도",
+            "믿을 수",
+            "신뢰",
+            "정확해",
+            "맞아",
+            "출처가",
+            "출처는",
+            "출처를",
+            "근거가",
+            "근거는",
+            "더 자세히",
+            "더 알려",
+            "더 설명",
+            "좀 더",
+            "요약해",
+            "정리해줘",
+            "다시 말해",
+            "다시 설명",
+            "왜 그래",
+            "왜 그런",
+            "무슨 말",
+            "무슨 뜻",
+            "뭔 말",
+            "뭔 소리",
+        ]
+        _is_followup = any(p in _q_lower for p in _followup_patterns)
+        if _is_followup:
+            # 실제 검색 주제가 있는지 확인 (엔티티 추출)
+            _followup_stop = {
+                "믿어",
+                "출처",
+                "근거",
+                "신뢰",
+                "정확",
+                "요약",
+                "정리",
+                "자세히",
+                "설명",
+                "알려",
+                "보여",
+                "말해",
+                "얘기",
+                "어디",
+                "뭐야",
+                "뭔지",
+                "어때",
+                "맞아",
+                "맞는",
+                "그거",
+                "이거",
+                "저거",
+                "그건",
+                "이건",
+                "더",
+                "좀",
+                "해줘",
+                "해주",
+                "해봐",
+                "할래",
+                "할까",
+                "다시",
+                "왜",
+                "뭔",
+                "무슨",
+                "진짜",
+                "확실",
+                "사실",
+            }
+            _fu_tokens = re.findall(r"[가-힣]{2,}", query_text)
+            # 부분 문자열 매칭: "믿어도"→"믿어" 포함, "출처가"→"출처" 포함
+            _fu_meaningful = [
+                t
+                for t in _fu_tokens
+                if not any(s in t or t in s for s in _followup_stop)
+            ]
+            if not _fu_meaningful:
+                return {
+                    "answer": (
+                        "이전 대화 맥락을 참조할 수 없어 답변이 어렵습니다. "
+                        "궁금한 주제나 키워드를 포함해서 다시 질문해 주세요.\n"
+                        '예: "삼성전자 관련 뉴스 출처 알려줘",'
+                        ' "AI 트렌드 자세히 알려줘"'
+                    ),
+                    "sources": [],
+                    "query": query_text,
+                    "model": final_model,
+                }
+
+        # (B) 극도로 모호한 질문 (불용어만으로 구성)
         _vague_stop = {
             "그거",
             "이거",
@@ -3467,25 +3834,26 @@ class RAGService:
         _vague_meaningful = [t for t in _vague_tokens if t not in _vague_stop]
         if len(_vague_meaningful) == 0 and len(query_text.strip()) < 20:
             return {
-                "answer": "질문이 너무 모호하여 관련 정보를 검색할 수 없습니다. "
-                "구체적인 키워드나 주제를 포함해 다시 질문해 주세요.",
+                "answer": (
+                    "질문이 너무 모호하여 관련 정보를 검색할 수 없습니다. "
+                    "구체적인 키워드나 주제를 포함해 다시 질문해 주세요."
+                ),
                 "sources": [],
                 "query": query_text,
+                "model": final_model,
             }
 
         # ========================================
         # STEP 0: 시간 스코프 감지 + 날짜 기반 사전 필터
         # ========================================
-        time_scope_days = _detect_time_scope(
+        range_start_dt, range_end_dt, time_scope_days = _detect_time_scope(
             query_text,
             intent_time_focus=intent_info.get("time_focus", ""),
         )
         _now_ts = time.time()
 
-        if time_scope_days > 0:
-            from datetime import datetime, timedelta, timezone
-
-            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=time_scope_days)
+        if range_start_dt is not None:
+            from datetime import datetime, timezone
 
             recent_candidates = []
             for r in candidates:
@@ -3494,26 +3862,42 @@ class RAGService:
                     continue
                 try:
                     doc_dt = datetime.fromisoformat(pa.replace("Z", "+00:00"))
-                    if doc_dt >= cutoff_dt:
-                        recent_candidates.append(r)
+                    if doc_dt.tzinfo is None:
+                        doc_dt = doc_dt.replace(tzinfo=timezone.utc)
+                    # 범위 필터: range_start <= doc_dt < range_end
+                    if doc_dt >= range_start_dt:
+                        if range_end_dt is None or doc_dt < range_end_dt:
+                            recent_candidates.append(r)
                 except (ValueError, TypeError):
                     pass
+
+            scope_label = (
+                f"{range_start_dt.strftime('%m/%d %H:%M')}~{range_end_dt.strftime('%m/%d %H:%M')}"
+                if range_end_dt
+                else f"{range_start_dt.strftime('%m/%d %H:%M')}~현재"
+            )
 
             # 시간 필터 후 결과가 충분하면 사용, 아니면 원본 유지
             if len(recent_candidates) >= max(int(top_k), 3):
                 logger.info(
-                    f"[RAG 시간필터] {time_scope_days}일 이내: {len(recent_candidates)}개 "
+                    f"[RAG 시간필터] {scope_label}: {len(recent_candidates)}개 "
                     f"(전체 {len(candidates)}개에서 필터)"
                 )
                 candidates = recent_candidates
+            elif recent_candidates:
+                # 결과가 부족해도 1개 이상이면 해당 기간 결과 사용
+                logger.info(
+                    f"[RAG 시간필터] {scope_label}: {len(recent_candidates)}개 (부족하지만 사용)"
+                )
+                candidates = recent_candidates
             else:
-                # 시간 필터 결과가 부족해도 시간순 정렬 유지
+                # 해당 기간 결과가 0개면 시간순 정렬로 fallback
                 candidates.sort(
                     key=lambda r: (r.metadata or {}).get("published_at", ""),
                     reverse=True,
                 )
                 logger.info(
-                    f"[RAG 시간필터] {time_scope_days}일 이내 {len(recent_candidates)}개로 부족, "
+                    f"[RAG 시간필터] {scope_label} 결과 0개, "
                     f"전체 {len(candidates)}개를 시간순으로 정렬"
                 )
 
@@ -3598,9 +3982,16 @@ class RAGService:
                 match_count = sum(
                     1 for ent in _filtered_entities if ent.lower() in combined_lower
                 )
-                if match_count > 0 and r.distance > 0.5:
+                if match_count > 0 and r.distance > 0.40:
+                    # cosine 거리 0.80 초과는 보정 제외 (우연한 키워드 매칭)
+                    if r.distance > 0.80:
+                        continue
                     old_dist = r.distance
-                    r.distance = max(0.5 - (match_count * 0.05), 0.2)
+                    reduction = min(match_count * 0.05, 0.10)
+                    # distance가 높을수록 보정 효과 감소
+                    if r.distance > 0.60:
+                        reduction *= 0.5
+                    r.distance = max(r.distance - reduction, 0.30)
                     logger.debug(
                         f"[RAG distance 보정] entity {match_count}개 매칭: "
                         f"distance {old_dist:.3f} → {r.distance:.3f}"
@@ -3637,7 +4028,7 @@ class RAGService:
         #   2) 키워드 overlap
         #   3) 최신성 가산 (시간 민감 쿼리일수록 강하게)
         #   4) 시맨틱 거리 (tiebreaker)
-        final_distance_cutoff = float(_get_setting("RAG_DISTANCE_THRESHOLD", 0.25))
+        final_distance_cutoff = float(_get_setting("RAG_DISTANCE_THRESHOLD", 0.15))
         has_entities = bool(key_entities)
         # 시간 민감 쿼리면 recency 가중치를 높임
         recency_weight = 5.0 if time_scope_days > 0 else 1.0
@@ -3734,6 +4125,7 @@ class RAGService:
                 "answer": insufficient_msg.get(source_intent, insufficient_msg["any"]),
                 "sources": [],
                 "query": query_text,
+                "model": final_model,
             }
 
         # ========================================
@@ -3807,6 +4199,7 @@ class RAGService:
                 "answer": f"'{query_text}'에 대한 관련 정보를 찾을 수 없습니다. 다른 키워드로 검색해보세요.",
                 "sources": [],
                 "query": query_text,
+                "model": final_model,
             }
 
         # intent_instruction이 있으면 instructions에 합류
@@ -3926,6 +4319,35 @@ class RAGService:
 
         logger.info(f"[RAG 타이밍] LLM 답변 생성: {time.time() - _t_stage:.2f}s")
         logger.info(f"[RAG 타이밍] 전체 파이프라인: {time.time() - _t_pipeline:.2f}s")
+
+        # "정보 없음" 답변이면 출처를 비워서 혼란 방지
+        _no_info_signals = [
+            "정보가 없습니다",
+            "정보는 없습니다",
+            "정보를 찾을 수 없",
+            "정보가 부족",
+            "정보가 포함되어 있지 않",
+            "자료가 없습니다",
+            "자료가 부족",
+            "자료가 없어",
+            "제공된 context에 없",
+            "제공된 context에는 없",
+            "context에 포함되어 있지 않",
+            "context에는 포함되어 있지 않",
+            "관련 정보가 없",
+            "관련 자료가 없",
+            "관련된 정보가 없",
+            "비교할 수 있는 자료가 없",
+            "비교가 불가능",
+            "확인되지 않",
+            "찾을 수 없습니다",
+            "제공하기 어렵",
+            "답변드리기 어렵",
+            "요청하신 내용에 대한 관련",
+        ]
+        _answer_lower = answer.lower().replace(" ", "")
+        if any(sig.replace(" ", "") in _answer_lower for sig in _no_info_signals):
+            sources = []
 
         history = QueryHistory.objects.create(
             query_text=query_text,
