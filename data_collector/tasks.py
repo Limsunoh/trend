@@ -7,11 +7,19 @@ from typing import Optional
 
 from celery import current_app, shared_task
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from django.utils import timezone
 
 from common.redis_services import RedisService
 
-from .models import CollectionSession, DataCollectionJob, NewsSource, SocialMediaSource
+from .models import (
+    CollectionSession,
+    DataCollectionJob,
+    NewsArticle,
+    NewsSource,
+    SocialMediaPost,
+    SocialMediaSource,
+)
 from .report_service import CollectionReportService
 from .services import (
     DCInsideCollectorService,
@@ -21,6 +29,80 @@ from .services import (
 
 # 로거 설정
 logger = logging.getLogger(__name__)
+
+RETENTION_DAYS_DEFAULT = 12
+
+
+def _delete_queryset_in_chunks(queryset, chunk_size: int = 2000) -> int:
+    """대량 삭제 시 DB 부하를 줄이기 위해 청크 단위로 삭제합니다."""
+    deleted_total = 0
+    while True:
+        ids = list(queryset.values_list("id", flat=True)[:chunk_size])
+        if not ids:
+            break
+        with transaction.atomic():
+            deleted_count, _ = queryset.model.objects.filter(id__in=ids).delete()
+        deleted_total += int(deleted_count)
+    return deleted_total
+
+
+@shared_task
+def cleanup_old_data_task(
+    retention_days: int = RETENTION_DAYS_DEFAULT, dry_run: bool = False
+):
+    """
+    보관 기간이 지난 수집/분석 데이터를 자동 정리합니다.
+
+    기본 보관 기간은 12일이며, cutoff 이전 데이터가 삭제 대상입니다.
+    """
+    if retention_days < 1:
+        retention_days = RETENTION_DAYS_DEFAULT
+
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    stats = {
+        "retention_days": retention_days,
+        "cutoff": cutoff.isoformat(),
+        "dry_run": dry_run,
+        "deleted": {},
+    }
+
+    from analyzer.models import TrendAnalysisResult
+    from user_qa.models import QueryHistory
+
+    targets = [
+        (
+            "trend_analysis_results",
+            TrendAnalysisResult.objects.filter(created_at__lt=cutoff),
+        ),
+        ("query_history", QueryHistory.objects.filter(created_at__lt=cutoff)),
+        ("news_articles", NewsArticle.objects.filter(collected_at__lt=cutoff)),
+        ("social_media_posts", SocialMediaPost.objects.filter(collected_at__lt=cutoff)),
+        (
+            "data_collection_jobs",
+            DataCollectionJob.objects.filter(started_at__lt=cutoff),
+        ),
+        (
+            "collection_sessions",
+            CollectionSession.objects.filter(started_at__lt=cutoff),
+        ),
+    ]
+
+    for label, qs in targets:
+        if dry_run:
+            count = qs.count()
+            stats["deleted"][label] = count
+            continue
+        deleted_count = _delete_queryset_in_chunks(qs)
+        stats["deleted"][label] = deleted_count
+
+    logger.info(
+        "[데이터 보관정리] retention_days=%s cutoff=%s dry_run=%s deleted=%s",
+        stats["retention_days"],
+        stats["cutoff"],
+        stats["dry_run"],
+        stats["deleted"],
+    )
+    return stats
 
 
 @shared_task(bind=True, max_retries=3)
