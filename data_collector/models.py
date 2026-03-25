@@ -117,7 +117,7 @@ class NewsArticle(models.Model):
 
     # 기사 URL (고유 식별자로 사용)
     url = models.URLField(
-        max_length=1000,
+        max_length=2000,
         unique=True,
         verbose_name="URL",
         help_text="뉴스 기사의 원본 URL (중복 방지용)",
