@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from django.core.management.base import BaseCommand
 from django.db.models import F
+from django.utils import timezone
 
 from data_collector.models import NewsArticle, SocialMediaPost
 from user_qa.services import VectorDBService
@@ -55,6 +57,12 @@ class Command(BaseCommand):
             choices=["all", "reddit", "dcinside"],
             help="소셜 임베딩 대상 플랫폼 선택 (all/reddit/dcinside)",
         )
+        parser.add_argument(
+            "--days",
+            type=int,
+            default=0,
+            help="최근 N일 이내 데이터만 임베딩 (0=전체)",
+        )
 
     def handle(self, *args, **opts):
         collection = opts["collection"]
@@ -63,6 +71,7 @@ class Command(BaseCommand):
         chunk_size = opts["chunk_size"]
         overlap = opts["overlap"]
         social_platform = opts["social_platform"]
+        days = opts["days"]
 
         vdb = VectorDBService(collection_name=collection)
 
@@ -70,10 +79,19 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(f"[Chunk] chunk_size={chunk_size}, overlap={overlap}")
         )
+        if days:
+            self.stdout.write(
+                self.style.SUCCESS(f"[Filter] 최근 {days}일 이내 데이터만 임베딩")
+            )
 
-        news_count = self._index_news(vdb, limit_news, chunk_size, overlap)
+        news_count = self._index_news(vdb, limit_news, chunk_size, overlap, days=days)
         social_count = self._index_social(
-            vdb, limit_social, chunk_size, overlap, platform_opt=social_platform
+            vdb,
+            limit_social,
+            chunk_size,
+            overlap,
+            platform_opt=social_platform,
+            days=days,
         )
 
         self.stdout.write(
@@ -88,11 +106,19 @@ class Command(BaseCommand):
     # - metadata(필터링): category, publisher(뉴스소스), author 등
     # ---------------------------------------
     def _index_news(
-        self, vdb: VectorDBService, limit: int, chunk_size: int, overlap: int
+        self,
+        vdb: VectorDBService,
+        limit: int,
+        chunk_size: int,
+        overlap: int,
+        days: int = 0,
     ) -> int:
         qs = NewsArticle.objects.select_related("source").order_by(
             F("published_at").desc(nulls_last=True)
         )
+        if days:
+            cutoff = timezone.now() - timedelta(days=days)
+            qs = qs.filter(published_at__gte=cutoff)
         if limit:
             qs = qs[:limit]
 
@@ -178,10 +204,15 @@ class Command(BaseCommand):
         chunk_size: int,
         overlap: int,
         platform_opt: str = "all",
+        days: int = 0,
     ) -> int:
         qs = SocialMediaPost.objects.select_related("source").order_by(
             F("published_at").desc(nulls_last=True)
         )
+
+        if days:
+            cutoff = timezone.now() - timedelta(days=days)
+            qs = qs.filter(published_at__gte=cutoff)
 
         # ✅ 플랫폼 필터링 (source.platform 기반)
         if platform_opt and platform_opt != "all":
