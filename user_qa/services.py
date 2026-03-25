@@ -95,6 +95,14 @@ class VectorDBService:
             metadatas=metadatas,
         )
 
+    def delete_old_documents(self, cutoff_iso: str) -> None:
+        """published_at < cutoff_iso인 문서를 삭제합니다."""
+        try:
+            self.collection.delete(where={"published_at": {"$lt": cutoff_iso}})
+            logger.info(f"[VectorDB] published_at < {cutoff_iso} 문서 삭제 완료")
+        except Exception as e:
+            logger.warning(f"[VectorDB] 오래된 문서 삭제 실패: {e}")
+
     def similarity_search(
         self,
         query_text: str,

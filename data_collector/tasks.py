@@ -95,6 +95,18 @@ def cleanup_old_data_task(
         deleted_count = _delete_queryset_in_chunks(qs)
         stats["deleted"][label] = deleted_count
 
+    # Chroma 벡터DB도 동일 cutoff 기준으로 정리
+    if not dry_run:
+        try:
+            from user_qa.services import VectorDBService
+
+            vdb = VectorDBService()
+            vdb.delete_old_documents(cutoff.isoformat())
+            stats["chroma_cleanup"] = "success"
+        except Exception as e:
+            logger.warning(f"[데이터 보관정리] Chroma 정리 실패: {e}")
+            stats["chroma_cleanup"] = f"failed: {e}"
+
     logger.info(
         "[데이터 보관정리] retention_days=%s cutoff=%s dry_run=%s deleted=%s",
         stats["retention_days"],
