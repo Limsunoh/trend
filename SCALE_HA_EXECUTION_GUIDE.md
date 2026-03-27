@@ -63,6 +63,40 @@ docker compose logs -f web
 
 **검증:** 동일 Locust 시나리오에서 Failure%·연결 오류 로그 감소.
 
+### 3-1. 스파이크 구간 해결 (추가 실행 절차)
+
+**목적:** 1~2분 구간의 p95 급등(예: 10~13초)과 RPS 급락을 줄인다.
+
+1. **시각 정렬부터 고정**  
+   Locust 스파이크 시각(UTC)과 CloudWatch 1분 메트릭(EC2 CPU, CWAgent 메모리, RDS CPU/IOPS), `web-access` 로그 시각을 같은 UTC 기준으로 맞춘다.
+
+2. **원인 분리 규칙(한 번에 1개만 변경)**  
+   아래는 동시에 바꾸지 않는다.  
+   - Gunicorn: `--max-requests`, `--max-requests-jitter`, `--worker-connections`, `--keep-alive`  
+   - 캐시: `LIST_API_CACHE_TTL`  
+   - 백그라운드 작업: Celery 큐/워커 분리 여부  
+   각 변경 후 동일 Locust 조건으로 재측정한다.
+
+3. **1차 튜닝 순서(권장)**  
+   - `max-requests` 완화: `10000 -> 20000` (재시작 빈도 완화)  
+   - `max-requests-jitter` 확대: `1000 -> 3000` (재시작 시점 분산 강화)  
+   - `worker-connections` 점검: 500 유지 후, 실패율/지연이 나쁘면 300~400도 비교  
+   변경 후 Failure%, p95, p99, RPS를 같은 길이 테스트(3분)로 비교한다.
+
+4. **캐시 미스 버스트 완화**  
+   스파이크 시점에 ReadIOPS가 동반 상승하면 캐시 미스 가능성이 높다.  
+   `.env`의 `LIST_API_CACHE_TTL`을 단계적으로 조정(예: 120 -> 180 -> 240)하고, 데이터 신선도와 p95를 함께 본다.
+
+5. **호스트 자원 경쟁 제거**  
+   스파이크 시각에 Celery/임베딩이 겹치면 웹 요청과 CPU 경쟁이 생긴다.  
+   가능하면 테스트 시간에는 임베딩 큐를 분리하거나 동시 실행을 피해서 웹 API 성능만 먼저 안정화한다.
+
+6. **완료 기준(스파이크 해결 판정)**  
+   - Failure%: 0% 유지  
+   - 스파이크 구간 p95: 기존 대비 30% 이상 감소  
+   - 같은 동시 사용자에서 RPS 급락 폭 축소  
+   - CloudWatch에서 CPU 99% 구간 지속 시간이 단축
+
 ---
 
 ## 4. DB 쿼리 최적화 (2순위)
