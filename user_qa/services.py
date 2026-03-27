@@ -96,10 +96,39 @@ class VectorDBService:
         )
 
     def delete_old_documents(self, cutoff_iso: str) -> None:
-        """published_at < cutoff_iso인 문서를 삭제합니다."""
+        """published_at < cutoff_iso인 문서를 배치 조회 후 삭제합니다."""
         try:
-            self.collection.delete(where={"published_at": {"$lt": cutoff_iso}})
-            logger.info(f"[VectorDB] published_at < {cutoff_iso} 문서 삭제 완료")
+            batch_size = 10000
+            offset = 0
+            ids_to_delete: list[str] = []
+
+            while True:
+                results = self.collection.get(
+                    offset=offset,
+                    limit=batch_size,
+                    include=["metadatas"],
+                )
+                if not results["ids"]:
+                    break
+
+                for doc_id, meta in zip(results["ids"], results["metadatas"]):
+                    pub = meta.get("published_at", "")
+                    if pub and pub < cutoff_iso:
+                        ids_to_delete.append(doc_id)
+
+                if len(results["ids"]) < batch_size:
+                    break
+                offset += batch_size
+
+            if ids_to_delete:
+                for i in range(0, len(ids_to_delete), 5000):
+                    batch = ids_to_delete[i : i + 5000]
+                    self.collection.delete(ids=batch)
+
+            logger.info(
+                f"[VectorDB] published_at < {cutoff_iso} 문서 "
+                f"{len(ids_to_delete)}건 삭제 완료"
+            )
         except Exception as e:
             logger.warning(f"[VectorDB] 오래된 문서 삭제 실패: {e}")
 
