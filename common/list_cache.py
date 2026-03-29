@@ -29,12 +29,22 @@ def make_list_cache_key(request, prefix: str) -> str:
     return f"list:{prefix}:{request.path}:{sorted_params}"
 
 
-def get_list_cache_ttl() -> int:
+def get_list_cache_ttl(prefix: str) -> int:
     """
-    목록 API 캐시 TTL(초). settings.LIST_API_CACHE_TTL 사용.
-    환경변수 LIST_API_CACHE_TTL로 오버라이드 가능 (기본 60초).
+    목록 API 캐시 TTL(초). prefix별로 settings의 그룹 TTL을 사용.
+
+    - dashboard:news, dashboard:social → LIST_API_CACHE_TTL_DASHBOARD
+    - analyzer:results, analyzer:analysis:* → LIST_API_CACHE_TTL_ANALYZER
+    - user_qa:history → LIST_API_CACHE_TTL_QA_HISTORY
+    - 그 외 → LIST_API_CACHE_TTL (폴백)
     """
-    return getattr(settings, "LIST_API_CACHE_TTL", 60)
+    if prefix in ("dashboard:news", "dashboard:social"):
+        return int(getattr(settings, "LIST_API_CACHE_TTL_DASHBOARD", 120))
+    if prefix == "analyzer:results" or prefix.startswith("analyzer:analysis:"):
+        return int(getattr(settings, "LIST_API_CACHE_TTL_ANALYZER", 600))
+    if prefix == "user_qa:history":
+        return int(getattr(settings, "LIST_API_CACHE_TTL_QA_HISTORY", 60))
+    return int(getattr(settings, "LIST_API_CACHE_TTL", 60))
 
 
 def get_cached_list_response(request, prefix: str):
@@ -53,5 +63,5 @@ def set_cached_list_response(request, prefix: str, data: dict) -> None:
     목록 API 응답 데이터를 캐시에 저장.
     """
     key = make_list_cache_key(request, prefix)
-    ttl = get_list_cache_ttl()
+    ttl = get_list_cache_ttl(prefix)
     cache.set(key, data, ttl)
