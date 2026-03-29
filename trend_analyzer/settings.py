@@ -233,8 +233,26 @@ CACHES = {
     }
 }
 
-# 목록 API Redis 캐시 TTL (초).
-LIST_API_CACHE_TTL = int(os.getenv("LIST_API_CACHE_TTL", "900"))
+# 목록 API Redis 캐시 TTL (초) — .env에서 그룹별 설정.
+# - 수집(뉴스/소셜 목록): 짧게
+# - 분석(결과·keywords 등 목록): 상대적으로 길게
+# - QA 히스토리 목록: 가장 짧게
+# 하위 호환: 환경변수 LIST_API_CACHE_TTL만 설정하면 위 세 그룹을 모두 동일 값으로 덮어씀.
+_list_ttl_unified = os.getenv("LIST_API_CACHE_TTL")
+if _list_ttl_unified is not None:
+    _list_ttl_v = int(_list_ttl_unified)
+    LIST_API_CACHE_TTL_DASHBOARD = _list_ttl_v
+    LIST_API_CACHE_TTL_ANALYZER = _list_ttl_v
+    LIST_API_CACHE_TTL_QA_HISTORY = _list_ttl_v
+else:
+    LIST_API_CACHE_TTL_DASHBOARD = int(os.getenv("LIST_API_CACHE_TTL_DASHBOARD", "120"))
+    LIST_API_CACHE_TTL_ANALYZER = int(os.getenv("LIST_API_CACHE_TTL_ANALYZER", "600"))
+    LIST_API_CACHE_TTL_QA_HISTORY = int(
+        os.getenv("LIST_API_CACHE_TTL_QA_HISTORY", "60")
+    )
+
+# getattr(settings, "LIST_API_CACHE_TTL") / 미분류 prefix 폴백용 (수집측과 동일 의미)
+LIST_API_CACHE_TTL = LIST_API_CACHE_TTL_DASHBOARD
 
 # Celery Configuration
 CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
@@ -418,14 +436,14 @@ VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", BASE_DIR / "vector_db")
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", BASE_DIR / "chroma_db")
 
 # RAG Quality Gating Thresholds
-# L2² 거리 기준 (정규화 임베딩: L2² = 2*(1-cos_sim))
-# 1.05 → cos_sim 0.475 미만만 차단 (진정한 무관 문서)
-RAG_HARD_DISTANCE_THRESHOLD = float(os.getenv("RAG_HARD_DISTANCE_THRESHOLD", "1.05"))
-# 평균 거리 0.65 초과 → LLM에 "low" 시그널
-RAG_WEAK_RELEVANCE_THRESHOLD = float(os.getenv("RAG_WEAK_RELEVANCE_THRESHOLD", "0.65"))
-RAG_NEWS_DISTANCE_THRESHOLD = float(os.getenv("RAG_NEWS_DISTANCE_THRESHOLD", "0.90"))
+# cosine 거리 기준 (distance = 1 - cosine_similarity)
+# 0.50 → cos_sim 0.50 미만만 차단 (진정한 무관 문서)
+RAG_HARD_DISTANCE_THRESHOLD = float(os.getenv("RAG_HARD_DISTANCE_THRESHOLD", "0.50"))
+# 평균 거리 0.35 초과 → LLM에 "low" 시그널
+RAG_WEAK_RELEVANCE_THRESHOLD = float(os.getenv("RAG_WEAK_RELEVANCE_THRESHOLD", "0.35"))
+RAG_NEWS_DISTANCE_THRESHOLD = float(os.getenv("RAG_NEWS_DISTANCE_THRESHOLD", "0.45"))
 RAG_COMMUNITY_DISTANCE_THRESHOLD = float(
-    os.getenv("RAG_COMMUNITY_DISTANCE_THRESHOLD", "0.90")
+    os.getenv("RAG_COMMUNITY_DISTANCE_THRESHOLD", "0.45")
 )
 
 # Logging Configuration

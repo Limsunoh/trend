@@ -338,6 +338,44 @@ class NewsArticleSerializer(serializers.ModelSerializer):
         return super().to_representation(instance)
 
 
+class NewsArticleListSerializer(serializers.ModelSerializer):
+    """대시보드 뉴스 목록 전용 — 테이블에 보이는 필드만 (DB·응답 부하 감소)."""
+
+    source_name = serializers.SerializerMethodField(read_only=True)
+    title_short = serializers.SerializerMethodField(read_only=True)
+    published_at_display = serializers.DateTimeField(
+        read_only=True,
+        source="published_at",
+        format="%Y-%m-%d %H:%M:%S",
+        allow_null=True,
+    )
+    collected_at_display = serializers.DateTimeField(
+        read_only=True,
+        source="collected_at",
+        format="%Y-%m-%d %H:%M:%S",
+    )
+
+    class Meta:
+        model = NewsArticle
+        fields = [
+            "id",
+            "source_name",
+            "title_short",
+            "published_at_display",
+            "collected_at_display",
+            "category",
+            "thumbnail_url",
+        ]
+
+    def get_source_name(self, obj: NewsArticle) -> str:
+        return str(obj.source) if obj.source else "Unknown"
+
+    def get_title_short(self, obj: NewsArticle) -> str:
+        if obj.title and len(obj.title) > 50:
+            return obj.title[:50] + "..."
+        return obj.title or ""
+
+
 class DataCollectionJobSerializer(serializers.ModelSerializer):
     """수집 작업 로그 조회용(읽기 전용) Serializer."""
 

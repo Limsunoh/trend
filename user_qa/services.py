@@ -66,7 +66,8 @@ class VectorDBService:
             settings=ChromaSettings(anonymized_telemetry=False),
         )
         self.collection = self.client.get_or_create_collection(
-            name=self.collection_name
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
         )
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
@@ -98,7 +99,7 @@ class VectorDBService:
         self,
         query_text: str,
         top_k: int = 5,
-        distance_threshold: float = 0.15,
+        distance_threshold: float = 0.10,
         fetch_multiplier: int = 2,
         *,
         balance_types: bool = True,  # ✅ 추가
@@ -316,6 +317,33 @@ def _extract_key_entities(query_text: str) -> List[str]:
         "변화",
         "영향",
         "결과",
+        # 감정/상태 표현 (엔티티가 아닌 일반 감성어)
+        "불안",
+        "불안해",
+        "불안한",
+        "걱정",
+        "걱정돼",
+        "무서워",
+        "답답",
+        "답답해",
+        "짜증",
+        "화나",
+        "힘들",
+        "미치",
+        "미치겠",
+        "심각",
+        "심각해",
+        "궁금",
+        "궁금해",
+        "좋은",
+        "나쁜",
+        "안좋",
+        # 의문/탐색 표현 (엔티티가 아닌 질문 구성어)
+        "무슨일",
+        "어쩌다",
+        "어떡해",
+        "어쩌면",
+        "뭐야",
     }
 
     # 1. 공백 기준 토큰 분리 → 조사 제거 → 엔티티 판별
@@ -481,6 +509,63 @@ def _tokens_ko_simple(s: str) -> set[str]:
     return toks - _STOP_TOKENS
 
 
+def _expand_query_for_search(query_text: str, key_entities: List[str]) -> List[str]:
+    """
+    구어체 쿼리를 뉴스 문체 변형으로 확장.
+    LLM 호출 없이 패턴 기반으로 생성하여 시맨틱 검색 커버리지 향상.
+    """
+    expanded = [query_text]
+    q_lower = query_text.lower()
+
+    if not key_entities:
+        return expanded
+
+    entity_str = " ".join(key_entities[:3])
+
+    if any(kw in q_lower for kw in ["어떻게", "어떤", "어때"]):
+        expanded.append(f"{entity_str} 현황 전망")
+    if any(kw in q_lower for kw in ["주가", "주식", "증시"]):
+        expanded.append(f"{entity_str} 실적 증시 시장")
+    if any(kw in q_lower for kw in ["반응", "여론", "의견"]):
+        expanded.append(f"{entity_str} 평가 영향 분석")
+    if any(kw in q_lower for kw in ["정책", "법", "제도"]):
+        expanded.append(f"{entity_str} 법안 제도 시행")
+
+    # 기본: 엔티티 + "뉴스" (뉴스 헤드라인 스타일 매칭)
+    if len(expanded) == 1:
+        expanded.append(f"{entity_str} 뉴스")
+
+    # 국가 미지정 시 "한국" 변형 추가 → 한국 콘텐츠 우선 검색
+    _country_names = {
+        "한국",
+        "미국",
+        "일본",
+        "중국",
+        "영국",
+        "독일",
+        "프랑스",
+        "러시아",
+        "북한",
+        "대만",
+        "호주",
+        "캐나다",
+        "인도",
+        "이란",
+        "이스라엘",
+        "korea",
+        "usa",
+        "us",
+        "japan",
+        "china",
+        "uk",
+    }
+    has_country = any(c in q_lower for c in _country_names)
+    if not has_country:
+        expanded.append(f"한국 {entity_str}")
+
+    return expanded[:4]
+
+
 def _keyword_overlap_count(query: str, text: str) -> int:
     """
     키워드 매칭 개수 계산.
@@ -641,69 +726,180 @@ def _search_reddit_by_title(
 
 # 강도 접두어: "가장 ~", "제일 ~", "최고로 ~" 등
 INTENSITY_PREFIXES = [
-    "가장", "제일", "최고로", "최고", "젤",
-    "완전", "엄청", "진짜", "되게", "매우", "정말", "너무",
+    "가장",
+    "제일",
+    "최고로",
+    "최고",
+    "젤",
+    "완전",
+    "엄청",
+    "진짜",
+    "되게",
+    "매우",
+    "정말",
+    "너무",
 ]
 
 # 인기/주목 수식어: "~ 유명한", "~ 핫한" 등
 POPULARITY_WORDS = [
-    "유명", "핫", "인기", "뜨는", "뜨거운", "뜨고",
-    "화제", "주목", "난리", "대박",
+    "유명",
+    "핫",
+    "인기",
+    "뜨는",
+    "뜨거운",
+    "뜨고",
+    "화제",
+    "주목",
+    "난리",
+    "대박",
+    "이슈",
 ]
 
 # 탐색적 트렌드 신호 단어: 특정 주제 없는 탐색적 쿼리에서 trend_enhanced 라우팅
 TREND_SIGNAL_WORDS = [
-    "트렌드", "이슈", "재밌", "재미있", "흥미", "볼만",
-    "큰", "컸", "많은", "궁금", "요즘", "대충",
+    "트렌드",
+    "이슈",
+    "재밌",
+    "재미있",
+    "흥미",
+    "볼만",
+    "큰",
+    "컸",
+    "많은",
+    "궁금",
+    "요즘",
+    "대충",
+    "놓친",
+    "못본",
+    "못 본",
+    "빠진",
+    "주요",
+    "중요한",
+    "핵심",
 ]
 
 # 키워드 수식어: "키워드" 앞에 붙어서 분석 의도를 나타내는 단어
 KEYWORD_QUALIFIERS = [
-    "핫", "인기", "급상승", "급등", "뜨는", "뜨고",
-    "트렌드", "많이", "자주", "요즘", "최근",
-    "상위", "톱", "top", "hot", "popular",
+    "핫",
+    "인기",
+    "급상승",
+    "급등",
+    "뜨는",
+    "뜨고",
+    "트렌드",
+    "많이",
+    "자주",
+    "요즘",
+    "최근",
+    "상위",
+    "톱",
+    "top",
+    "hot",
+    "popular",
 ]
 
 # 뉴스 출처 감지 키워드
 NEWS_INDICATORS = [
-    "뉴스", "기사", "보도", "언론", "신문", "매체",
-    "보도자료", "속보", "헤드라인", "방송", "취재",
-    "리포트", "보도내용", "news", "article", "press", "report",
+    "뉴스",
+    "기사",
+    "보도",
+    "언론",
+    "신문",
+    "매체",
+    "보도자료",
+    "속보",
+    "헤드라인",
+    "방송",
+    "취재",
+    "리포트",
+    "보도내용",
+    "news",
+    "article",
+    "press",
+    "report",
 ]
 
 # 커뮤니티 출처 감지 키워드
 COMMUNITY_INDICATORS = [
-    "커뮤니티", "게시글", "게시판", "반응", "여론", "댓글",
-    "디시", "dcinside", "레딧", "reddit", "갤러리", "유저",
-    "네티즌", "온라인반응", "온라인 반응", "sns", "소셜",
-    "트위터", "엑스", "인스타", "페이스북", "유튜브",
-    "블로그", "카페", "클리앙", "루리웹", "에펨코리아",
+    "커뮤니티",
+    "게시글",
+    "게시판",
+    "반응",
+    "여론",
+    "댓글",
+    "디시",
+    "dcinside",
+    "레딧",
+    "reddit",
+    "갤러리",
+    "유저",
+    "네티즌",
+    "온라인반응",
+    "온라인 반응",
+    "sns",
+    "소셜",
+    "트위터",
+    "엑스",
+    "인스타",
+    "페이스북",
+    "유튜브",
+    "블로그",
+    "카페",
+    "클리앙",
+    "루리웹",
+    "에펨코리아",
 ]
 
 # 분석 의도 감지 — 직접 매칭되는 구문 (띄어쓰기 무관 매칭은 아래 함수에서 처리)
 _ANALYSIS_DIRECT_PHRASES = [
-    "분석 결과", "분석결과",
-    "플랫폼 비교", "플랫폼비교",
-    "시간차 분석", "시간차분석",
-    "트렌드 분석", "트렌드분석",
-    "트렌드 동기화", "동기화 분석",
-    "시간대별 분석", "시간대별 트렌드",
-    "참여도 분석", "참여도 키워드",
-    "많이 언급", "자주 언급", "자주 등장",
-    "surge", "engagement",
+    "분석 결과",
+    "분석결과",
+    "플랫폼 비교",
+    "플랫폼비교",
+    "시간차 분석",
+    "시간차분석",
+    "트렌드 분석",
+    "트렌드분석",
+    "트렌드 동기화",
+    "동기화 분석",
+    "시간대별 분석",
+    "시간대별 트렌드",
+    "참여도 분석",
+    "참여도 키워드",
+    "많이 언급",
+    "자주 언급",
+    "자주 등장",
+    "surge",
+    "engagement",
     # 자연어 동의어 (플랫폼 속도/비교)
-    "반영이 빨라", "반영이 느려", "반영 속도", "먼저 반영",
-    "빠른 플랫폼", "느린 플랫폼", "플랫폼별 비교",
+    "반영이 빨라",
+    "반영이 느려",
+    "반영 속도",
+    "먼저 반영",
+    "빠른 플랫폼",
+    "느린 플랫폼",
+    "플랫폼별 비교",
 ]
 
 # 시스템 메타 질문 감지 패턴 ("기준이 뭐야?", "어떻게 계산해?" 등)
 _META_QUESTION_PATTERNS = [
-    "기준이 뭐", "기준이 뭔", "기준이 무엇", "어떤 기준",
-    "어떻게 계산", "어떻게 분석", "어떻게 선정", "어떻게 판단",
-    "무슨 뜻", "무슨 의미",
-    "알고리즘", "방법론",
-    "급상승 기준", "인기 기준", "트렌드 기준",
-    "어떤 방식", "어떤 방법",
+    "기준이 뭐",
+    "기준이 뭔",
+    "기준이 무엇",
+    "어떤 기준",
+    "어떻게 계산",
+    "어떻게 분석",
+    "어떻게 선정",
+    "어떻게 판단",
+    "무슨 뜻",
+    "무슨 의미",
+    "알고리즘",
+    "방법론",
+    "급상승 기준",
+    "인기 기준",
+    "트렌드 기준",
+    "어떤 방식",
+    "어떤 방법",
 ]
 
 # 메타 질문에 대한 시스템 설명 (LLM context로 전달)
@@ -787,8 +983,11 @@ def _apply_negation(q: str):
 
     # "X만" → 해당 출처만 ON
     for sw, target in [
-        ("뉴스만", "news"), ("기사만", "news"),
-        ("sns만", "community"), ("커뮤니티만", "community"), ("소셜만", "community"),
+        ("뉴스만", "news"),
+        ("기사만", "news"),
+        ("sns만", "community"),
+        ("커뮤니티만", "community"),
+        ("소셜만", "community"),
     ]:
         if sw in q_l:
             if target == "news":
@@ -897,29 +1096,57 @@ def _gen_keyword_phrases(qualifiers: list) -> list:
 
 # hot_keywords / surge_keywords 감지용 수식어 (KEYWORD_QUALIFIERS · POPULARITY_WORDS 에서 파생)
 _HOT_KW_QUALIFIERS = [
-    "인기", "인기있는", "인기 있는", "핫", "핫한",
-    "뜨는", "뜨고 있는", "요즘", "최근", "트렌드", "상위",
-    "톱", "top", "hot", "popular",
+    "인기",
+    "인기있는",
+    "인기 있는",
+    "핫",
+    "핫한",
+    "뜨는",
+    "뜨고 있는",
+    "요즘",
+    "최근",
+    "트렌드",
+    "상위",
+    "톱",
+    "top",
+    "hot",
+    "popular",
 ]
 _SURGE_KW_QUALIFIERS = ["급상승", "급상승하는", "급등", "급등하는"]
 
 # 쿼리 키워드 → analysis_type 매핑 (hot/surge 는 조합 자동 생성)
 _ANALYSIS_TYPE_KEYWORDS = {
     "keywords": [
-        "키워드 분석", "키워드분석", "뉴스 키워드", "sns 키워드", "커뮤니티 키워드",
-        "많이 언급", "자주 언급", "자주 등장",
+        "키워드 분석",
+        "키워드분석",
+        "뉴스 키워드",
+        "sns 키워드",
+        "커뮤니티 키워드",
+        "많이 언급",
+        "자주 언급",
+        "자주 등장",
     ],
     "compare_platforms": [
-        "플랫폼 비교", "플랫폼비교", "뉴스 sns 비교", "뉴스 커뮤니티 비교",
-        "뉴스와 커뮤니티", "뉴스랑 커뮤니티",
-        "플랫폼별 비교", "플랫폼별 키워드",
+        "플랫폼 비교",
+        "플랫폼비교",
+        "뉴스 sns 비교",
+        "뉴스 커뮤니티 비교",
+        "뉴스와 커뮤니티",
+        "뉴스랑 커뮤니티",
+        "플랫폼별 비교",
+        "플랫폼별 키워드",
     ],
     "hot_keywords": _gen_keyword_phrases(_HOT_KW_QUALIFIERS),
     "surge_keywords": _gen_keyword_phrases(_SURGE_KW_QUALIFIERS) + ["surge"],
     "time_lag": [
-        "시간차 분석", "시간차분석",
-        "반영이 빨라", "반영이 느려", "반영 속도", "먼저 반영",
-        "빠른 플랫폼", "느린 플랫폼",
+        "시간차 분석",
+        "시간차분석",
+        "반영이 빨라",
+        "반영이 느려",
+        "반영 속도",
+        "먼저 반영",
+        "빠른 플랫폼",
+        "느린 플랫폼",
     ],
     "trend_synchronization": ["트렌드 동기화", "동기화 분석"],
     "hourly_trends": ["시간대별 분석", "시간대별 트렌드"],
@@ -928,7 +1155,11 @@ _ANALYSIS_TYPE_KEYWORDS = {
 
 # "키워드" + 수식어 조합 → analysis_type 매핑 (KEYWORD_QUALIFIERS 기반)
 _KEYWORD_QUALIFIER_TO_TYPE = {
-    "hot_keywords": [q for q in KEYWORD_QUALIFIERS if q not in ("급상승", "급등", "트렌드", "많이", "자주")],
+    "hot_keywords": [
+        q
+        for q in KEYWORD_QUALIFIERS
+        if q not in ("급상승", "급등", "트렌드", "많이", "자주")
+    ],
     "surge_keywords": ["급상승", "급등"],
     "keywords": ["많이", "자주", "트렌드"],
 }
@@ -957,11 +1188,12 @@ def _detect_analysis_types(query_text: str) -> List[str]:
     return matched
 
 
-def _fetch_analysis_context(query_text: str, max_results: int = 3) -> Tuple[str, List[Dict[str, Any]]]:
+def _fetch_analysis_context(
+    query_text: str, max_results: int = 3
+) -> Tuple[str, List[Dict[str, Any]]]:
     """
     TrendAnalysisResult에서 관련 분석 결과를 조회하여 LLM context 문자열로 변환.
     """
-    import json
     from analyzer.models import TrendAnalysisResult
 
     matched_types = _detect_analysis_types(query_text)
@@ -975,7 +1207,9 @@ def _fetch_analysis_context(query_text: str, max_results: int = 3) -> Tuple[str,
     else:
         qs = TrendAnalysisResult.objects.filter(
             status="success",
-        ).order_by("-created_at")[:max_results]
+        ).order_by(
+            "-created_at"
+        )[:max_results]
 
     if not qs.exists():
         return "", []
@@ -1002,12 +1236,20 @@ def _fetch_analysis_context(query_text: str, max_results: int = 3) -> Tuple[str,
         result_data = result.result_data or {}
 
         # 핵심 정보만 추출 (LLM context 크기 제한)
-        context_parts = [f"[분석결과] {label} | 기간: {result.days or '?'}일 | 날짜: {result.created_at.strftime('%Y-%m-%d %H:%M')}"]
+        context_parts = [
+            f"[분석결과] {label} | 기간: {result.days or '?'}일 | 날짜: {result.created_at.strftime('%Y-%m-%d %H:%M')}"
+        ]
 
         # top_keywords 추출 (있으면)
-        for key in ["top_keywords", "news_surge_keywords", "sns_surge_keywords",
-                     "engagement_keywords", "viral_keywords", "synchronized_keywords",
-                     "common_keywords"]:
+        for key in [
+            "top_keywords",
+            "news_surge_keywords",
+            "sns_surge_keywords",
+            "engagement_keywords",
+            "viral_keywords",
+            "synchronized_keywords",
+            "common_keywords",
+        ]:
             items = result_data.get(key, [])
             if items and isinstance(items, list):
                 top_items = items[:10]
@@ -1015,7 +1257,12 @@ def _fetch_analysis_context(query_text: str, max_results: int = 3) -> Tuple[str,
                 for item in top_items:
                     if isinstance(item, dict):
                         kw = item.get("keyword", "")
-                        freq = item.get("frequency") or item.get("growth_ratio") or item.get("correlation") or ""
+                        freq = (
+                            item.get("frequency")
+                            or item.get("growth_ratio")
+                            or item.get("correlation")
+                            or ""
+                        )
                         if kw:
                             lines.append(f"  - {kw}: {freq}")
                 if lines:
@@ -1023,7 +1270,9 @@ def _fetch_analysis_context(query_text: str, max_results: int = 3) -> Tuple[str,
                     context_parts.extend(lines)
 
         # 통계 요약
-        stats = result_data.get("statistics") or result_data.get("summary") or summary_data
+        stats = (
+            result_data.get("statistics") or result_data.get("summary") or summary_data
+        )
         if stats and isinstance(stats, dict):
             stats_lines = []
             for k, v in list(stats.items())[:8]:
@@ -1038,38 +1287,50 @@ def _fetch_analysis_context(query_text: str, max_results: int = 3) -> Tuple[str,
             if isinstance(platform_data, dict):
                 top_kws = platform_data.get("top_keywords", [])[:5]
                 if top_kws:
-                    kw_strs = [f"{item.get('keyword', '')}({item.get('frequency', ''):.3f})" for item in top_kws if isinstance(item, dict)]
+                    kw_strs = [
+                        f"{item.get('keyword', '')}({item.get('frequency', ''):.3f})"
+                        for item in top_kws
+                        if isinstance(item, dict)
+                    ]
                     if kw_strs:
-                        context_parts.append(f"{platform_key} 상위 키워드: {', '.join(kw_strs)}")
+                        context_parts.append(
+                            f"{platform_key} 상위 키워드: {', '.join(kw_strs)}"
+                        )
 
         block_text = "\n".join(context_parts)
         blocks.append(block_text)
 
-        sources.append({
-            "id": f"analysis:{result.id}",
-            "distance": 0.0,
-            "url": None,
-            "title": f"{label} ({result.created_at.strftime('%Y-%m-%d')})",
-            "type": "analysis",
-            "platform": result.platform,
-            "publisher": None,
-            "category": result.analysis_type,
-            "identifier": None,
-            "source_display": label,
-            "published_at": result.created_at.isoformat(),
-            "excerpt": block_text[:300],
-        })
+        sources.append(
+            {
+                "id": f"analysis:{result.id}",
+                "distance": 0.0,
+                "url": None,
+                "title": f"{label} ({result.created_at.strftime('%Y-%m-%d')})",
+                "type": "analysis",
+                "platform": result.platform,
+                "publisher": None,
+                "category": result.analysis_type,
+                "identifier": None,
+                "source_display": label,
+                "published_at": result.created_at.isoformat(),
+                "excerpt": block_text[:300],
+            }
+        )
 
-    context = "[EVIDENCE_QUALITY: adequate]\n[SOURCE_FILTER: analysis]\n\n" + "\n\n---\n\n".join(blocks)
+    context = (
+        "[EVIDENCE_QUALITY: adequate]\n[SOURCE_FILTER: analysis]\n\n"
+        + "\n\n---\n\n".join(blocks)
+    )
     return context, sources
 
 
-def _extract_keywords_from_analysis(query_text: str, max_keywords: int = 10) -> List[str]:
+def _extract_keywords_from_analysis(
+    query_text: str, max_keywords: int = 10
+) -> List[str]:
     """
     분석 결과(TrendAnalysisResult)에서 상위 키워드를 추출한다.
     compound intent("analysis+search")에서 벡터 검색 쿼리를 만들기 위해 사용.
     """
-    import json
     from analyzer.models import TrendAnalysisResult
 
     matched_types = _detect_analysis_types(query_text)
@@ -1082,13 +1343,20 @@ def _extract_keywords_from_analysis(query_text: str, max_keywords: int = 10) -> 
     else:
         qs = TrendAnalysisResult.objects.filter(
             status="success",
-        ).order_by("-created_at")[:3]
+        ).order_by(
+            "-created_at"
+        )[:3]
 
     keywords = []
     keyword_keys = [
-        "top_keywords", "news_surge_keywords", "sns_surge_keywords",
-        "engagement_keywords", "viral_keywords", "synchronized_keywords",
-        "common_keywords", "hot_keywords",
+        "top_keywords",
+        "news_surge_keywords",
+        "sns_surge_keywords",
+        "engagement_keywords",
+        "viral_keywords",
+        "synchronized_keywords",
+        "common_keywords",
+        "hot_keywords",
     ]
 
     for result in qs:
@@ -1136,34 +1404,144 @@ def _extract_topic_from_query(query_text: str) -> List[str]:
         set(INTENSITY_PREFIXES)
         | set(POPULARITY_WORDS)
         | set(TREND_SIGNAL_WORDS)
-        | {f"{w}한" for w in POPULARITY_WORDS}   # "유명한", "핫한" 등
+        | {f"{w}한" for w in POPULARITY_WORDS}  # "유명한", "핫한" 등
         | {f"{w}는" for w in TREND_SIGNAL_WORDS}  # "재밌는", "흥미로운" 등
         | {"인기있는", "인기 있는", "재밌는", "재미있는", "흥미로운"}
         | set(NEWS_INDICATORS)
         | set(COMMUNITY_INDICATORS)
         | {
             # 시간 표현
-            "지금", "현재", "오늘",
+            "지금",
+            "현재",
+            "오늘",
             # 일반 불용어
-            "내용", "이슈", "소식", "정보", "많이",
-            "대해", "대해서", "관련", "관련된", "관해", "관해서",
-            "알려줘", "알려주세요", "알려", "뭐야", "뭐", "뭔가", "어때",
-            "뭐가", "뭘", "뭐를", "뭐든", "어디", "어디서", "언제", "얼마나",
-            "컸어", "많지", "있지", "없지", "됐어", "했어",
+            "내용",
+            "이슈",
+            "소식",
+            "정보",
+            "많이",
+            "대해",
+            "대해서",
+            "관련",
+            "관련된",
+            "관해",
+            "관해서",
+            "알려줘",
+            "알려주세요",
+            "알려",
+            "뭐야",
+            "뭐",
+            "뭔가",
+            "어때",
+            "뭐가",
+            "뭘",
+            "뭐를",
+            "뭐든",
+            "어디",
+            "어디서",
+            "언제",
+            "얼마나",
+            "컸어",
+            "많지",
+            "있지",
+            "없지",
+            "됐어",
+            "했어",
+            # 감정/상태 표현 (주제가 아닌 수식어)
+            "불안",
+            "불안해",
+            "불안한",
+            "걱정",
+            "걱정돼",
+            "무서워",
+            "답답",
+            "답답해",
+            "짜증",
+            "화나",
+            "힘들",
+            "미치겠",
+            "심각",
+            "심각해",
+            "궁금",
+            "궁금해",
+            "안좋",
+            "나쁜",
+            "좋은",
+            # 의문/탐색 표현 (질문 구성어)
+            "무슨일",
+            "무슨일이",
+            "어쩌다",
+            "어떡해",
+            "어쩌면",
+            "진짜",
+            "너무",
             # 조사·어미·기능어
-            "에", "은", "는", "이", "가", "을", "를", "의", "로", "으로",
-            "에서", "에게", "한테", "들", "좀", "해줘",
-            "없이", "있는", "없는", "있어", "없어", "있는지", "없는지",
-            "있나", "없나", "있을", "없을", "있게", "없게",
+            "에",
+            "은",
+            "는",
+            "이",
+            "가",
+            "을",
+            "를",
+            "의",
+            "로",
+            "으로",
+            "에서",
+            "에게",
+            "한테",
+            "들",
+            "좀",
+            "해줘",
+            "없이",
+            "있는",
+            "없는",
+            "있어",
+            "없어",
+            "있는지",
+            "없는지",
+            "있나",
+            "없나",
+            "있을",
+            "없을",
+            "있게",
+            "없게",
         }
     )
 
     # 토큰 분리 후 노이즈 제거
+    # 동사 어미도 제거 (조사 제거만으로는 "무슨일이야" → "무슨일" 변환 불가)
+    _topic_verb_suffixes = [
+        "이야",
+        "인가",
+        "일까",
+        "인지",
+        "인데",
+        "이냐",
+        "해줘",
+        "해봐",
+        "할까",
+        "했어",
+        "하는",
+        "한다",
+        "뭐야",
+        "뭐냐",
+        "뭐임",
+        "있어",
+        "있나",
+        "없어",
+        "줘",
+        "해",
+    ]
     tokens = q.split()
     topics = []
     for token in tokens:
         # 조사 제거
         cleaned = _strip_ko_particles(token)
+        # 동사 어미 제거 (긴 접미사부터 매칭)
+        for suf in _topic_verb_suffixes:
+            if cleaned.endswith(suf) and len(cleaned) > len(suf) + 1:
+                cleaned = cleaned[: -len(suf)]
+                break
         if cleaned.lower() in _noise_words or len(cleaned) < 2:
             continue
         # 영문은 그대로
@@ -1207,31 +1585,79 @@ def _get_trending_keywords_by_topic(
         # fallback: 모든 타입에서
         qs = TrendAnalysisResult.objects.filter(
             status="success",
-        ).order_by("-created_at")[:5]
+        ).order_by(
+            "-created_at"
+        )[:5]
 
     # 플랫폼별로 우선 수집할 키워드 키 분류
     _news_keys = [
-        "top_keywords", "news_hot_keywords", "news_surge_keywords",
+        "top_keywords",
+        "news_hot_keywords",
+        "news_surge_keywords",
     ]
     _sns_keys = [
-        "top_keywords", "sns_hot_keywords", "sns_surge_keywords",
-        "engagement_keywords", "viral_keywords",
+        "top_keywords",
+        "sns_hot_keywords",
+        "sns_surge_keywords",
+        "engagement_keywords",
+        "viral_keywords",
     ]
     _common_keys = [
-        "hot_keywords", "common_keywords", "synchronized_keywords",
+        "hot_keywords",
+        "common_keywords",
+        "synchronized_keywords",
     ]
-    keyword_keys = list(set(
-        _news_keys + _sns_keys + _common_keys
-    ))
 
     # 트렌드 키워드로 의미없는 범용 단어 필터
     _trending_stopwords = {
-        "기간", "전달", "이후", "이상", "이하", "대비", "관련", "이번",
-        "현재", "최근", "지난", "올해", "내년", "작년", "오늘", "내일",
-        "대표", "위원", "관계자", "측", "사람", "경우", "부분", "상황",
-        "시작", "진행", "발표", "설명", "의견", "입장", "결과", "내용",
-        "문제", "방법", "시간", "이유", "정도", "사실", "가능", "예정",
-        "계획", "참여", "지원", "제공", "운영", "활동", "조사", "요청",
+        "기간",
+        "전달",
+        "이후",
+        "이상",
+        "이하",
+        "대비",
+        "관련",
+        "이번",
+        "현재",
+        "최근",
+        "지난",
+        "올해",
+        "내년",
+        "작년",
+        "오늘",
+        "내일",
+        "대표",
+        "위원",
+        "관계자",
+        "측",
+        "사람",
+        "경우",
+        "부분",
+        "상황",
+        "시작",
+        "진행",
+        "발표",
+        "설명",
+        "의견",
+        "입장",
+        "결과",
+        "내용",
+        "문제",
+        "방법",
+        "시간",
+        "이유",
+        "정도",
+        "사실",
+        "가능",
+        "예정",
+        "계획",
+        "참여",
+        "지원",
+        "제공",
+        "운영",
+        "활동",
+        "조사",
+        "요청",
     }
 
     def _extract_freq_from_item(item: dict) -> float:
@@ -1302,9 +1728,9 @@ def _get_trending_keywords_by_topic(
         return kw not in _trending_stopwords and len(kw) >= 2
 
     # 플랫폼별로 분리 수집
-    primary_items = []   # 요청 플랫폼 키워드 (우선)
-    secondary_items = [] # 반대 플랫폼 키워드 (보충)
-    common_items = []    # 공통/교차 키워드
+    primary_items = []  # 요청 플랫폼 키워드 (우선)
+    secondary_items = []  # 반대 플랫폼 키워드 (보충)
+    common_items = []  # 공통/교차 키워드
 
     for result in qs:
         result_data = result.result_data or {}
@@ -1329,7 +1755,9 @@ def _get_trending_keywords_by_topic(
                     continue  # news와 중복되므로 하위 구조에서 처리
                 items_list = layer.get(key, [])
                 if items_list and isinstance(items_list, list):
-                    target = primary_items if platform == "community" else secondary_items
+                    target = (
+                        primary_items if platform == "community" else secondary_items
+                    )
                     _collect_from_list(items_list, result.analysis_type, target)
 
             # 공통 키워드 (양쪽 공통)
@@ -1345,14 +1773,24 @@ def _get_trending_keywords_by_topic(
                 sub_items = platform_data.get("top_keywords", [])
                 if sub_items:
                     if platform == "news" and platform_key == "news":
-                        _collect_from_list(sub_items, result.analysis_type, primary_items)
+                        _collect_from_list(
+                            sub_items, result.analysis_type, primary_items
+                        )
                     elif platform == "community" and platform_key == "sns":
-                        _collect_from_list(sub_items, result.analysis_type, primary_items)
+                        _collect_from_list(
+                            sub_items, result.analysis_type, primary_items
+                        )
                     elif platform_key == "news":
-                        target = secondary_items if platform == "community" else primary_items
+                        target = (
+                            secondary_items
+                            if platform == "community"
+                            else primary_items
+                        )
                         _collect_from_list(sub_items, result.analysis_type, target)
                     else:  # sns
-                        target = secondary_items if platform == "news" else primary_items
+                        target = (
+                            secondary_items if platform == "news" else primary_items
+                        )
                         _collect_from_list(sub_items, result.analysis_type, target)
 
     # 플랫폼 지정 시: primary(해당 플랫폼)만 사용, 부족하면 common → secondary 순서로 보충
@@ -1369,7 +1807,9 @@ def _get_trending_keywords_by_topic(
         return [], ""
 
     # 불용어 필터
-    all_kw_items = [(kw, freq, at) for kw, freq, at in all_kw_items if _is_valid_trending_kw(kw)]
+    all_kw_items = [
+        (kw, freq, at) for kw, freq, at in all_kw_items if _is_valid_trending_kw(kw)
+    ]
 
     if not all_kw_items:
         return [], ""
@@ -1386,7 +1826,7 @@ def _get_trending_keywords_by_topic(
             # 3글자 이상 한글 복합어는 2글자 단위로도 분해
             if len(t_low) >= 3 and re.match(r"^[가-힣]+$", t_low):
                 for i in range(len(t_low) - 1):
-                    chunk = t_low[i:i + 2]
+                    chunk = t_low[i : i + 2]
                     if chunk not in topic_lower:
                         topic_lower.append(chunk)
 
@@ -1419,11 +1859,13 @@ def _get_trending_keywords_by_topic(
 
     # 주제 관련 키워드를 못 찾았으면 주제 단어 자체를 키워드로 사용
     if topic_words and not topic_matched:
-        keywords = topic_words + keywords[:max_keywords - len(topic_words)]
+        keywords = topic_words + keywords[: max_keywords - len(topic_words)]
 
     # 요약 텍스트 (LLM context에 포함)
     if topic_matched:
-        summary_lines = [f"[분석결과] '{', '.join(topic_words)}' 관련 트렌드 키워드 (중요도순):"]
+        summary_lines = [
+            f"[분석결과] '{', '.join(topic_words)}' 관련 트렌드 키워드 (중요도순):"
+        ]
     else:
         summary_lines = ["[분석결과] 트렌드 상위 키워드 (중요도순):"]
     for kw, freq, atype in top_items:
@@ -1441,22 +1883,56 @@ def _get_trending_keywords_by_topic(
     return keywords, summary_text
 
 
-def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
+def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> "tuple":
     """
-    쿼리의 시간 범위를 일(day) 단위로 반환.
-    0 = 시간 제약 없음, N = 최근 N일 이내 문서 우선/필터.
+    쿼리의 시간 범위를 (range_start_dt, range_end_dt, scope_days) 튜플로 반환.
+    - range_start_dt: datetime(KST) 범위 시작 (inclusive), None=제약없음
+    - range_end_dt:   datetime(KST) 범위 끝 (exclusive), None=현재까지
+    - scope_days:     int 근사 범위 (recency 가중치용), 0=제약없음
 
-    예: "오늘 이슈" → 1, "최근 뉴스" → 7, "요즘 핫한" → 14
+    KST 자정 기준으로 캘린더 일 경계 사용.
+    예: "어제" → (어제00:00 KST, 오늘00:00 KST, 2) → 어제 하루만
     """
+    from datetime import datetime, timedelta, timezone
+
+    KST = timezone(timedelta(hours=9))
+    now_kst = datetime.now(KST)
+    today_midnight = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+
     q = (query_text or "").strip().lower()
+
+    # 특정 날짜 패턴: "3월 16일", "3/16", "03월 16일" 등
+    import re as _re
+
+    _date_match = _re.search(r"(\d{1,2})\s*[월/\.]\s*(\d{1,2})\s*일?", q)
+    if _date_match:
+        month = int(_date_match.group(1))
+        day = int(_date_match.group(2))
+        year = now_kst.year
+        try:
+            target = today_midnight.replace(month=month, day=day)
+            # 미래 날짜면 작년으로
+            if target > now_kst:
+                target = target.replace(year=year - 1)
+            return (target, target + timedelta(days=1), 1)
+        except ValueError:
+            pass  # 잘못된 날짜(2월 30일 등)는 무시
 
     # 강한 시간 신호 (좁은 범위)
     if any(kw in q for kw in ["오늘", "today", "방금", "지금"]):
-        return 1
+        return (today_midnight, None, 1)
     if any(kw in q for kw in ["어제", "yesterday"]):
-        return 2
+        return (today_midnight - timedelta(days=1), today_midnight, 2)
     if any(kw in q for kw in ["이번주", "이번 주", "금주"]):
-        return 7
+        # 이번주 월요일 00:00 KST ~ 현재
+        weekday = today_midnight.weekday()  # 0=월
+        this_week_start = today_midnight - timedelta(days=weekday)
+        return (this_week_start, None, 7)
+    if any(kw in q for kw in ["지난주", "저번주", "저번 주", "지난 주"]):
+        weekday = today_midnight.weekday()
+        this_week_start = today_midnight - timedelta(days=weekday)
+        last_week_start = this_week_start - timedelta(days=7)
+        return (last_week_start, this_week_start, 14)
 
     # 중간 시간 신호
     if any(
@@ -1475,17 +1951,22 @@ def _detect_time_scope(query_text: str, intent_time_focus: str = "") -> int:
             "떠오르는",
         ]
     ):
-        return 14
+        return (today_midnight - timedelta(days=14), None, 14)
     if any(kw in q for kw in ["이번달", "이번 달", "금월"]):
-        return 30
+        this_month_start = today_midnight.replace(day=1)
+        return (this_month_start, None, 30)
+    if any(kw in q for kw in ["지난달", "저번달", "저번 달", "지난 달"]):
+        this_month_start = today_midnight.replace(day=1)
+        last_month_start = (this_month_start - timedelta(days=1)).replace(day=1)
+        return (last_month_start, this_month_start, 60)
 
     # intent_info의 time_focus 활용
     if intent_time_focus == "recent":
-        return 14
+        return (today_midnight - timedelta(days=14), None, 14)
     if intent_time_focus == "current":
-        return 30
+        return (today_midnight - timedelta(days=30), None, 30)
 
-    return 0
+    return (None, None, 0)
 
 
 def _recency_score(published_at: str, now_ts: float) -> float:
@@ -1564,10 +2045,14 @@ def _build_context_and_sources(
             }
         )
 
-    # evidence_quality 헤더: LLM 답변에 영향 주지 않는 내부 태그로만 사용
     header_lines = []
     if source_intent != "any":
         header_lines.append(f"[SOURCE_FILTER: {source_intent}]")
+    if evidence_quality == "low":
+        header_lines.append(
+            "[EVIDENCE_QUALITY: LOW] 검색된 자료의 관련성이 낮을 수 있습니다. "
+            "자료 내용을 바탕으로 답변하되, 관련 자료가 전혀 없다면 솔직하게 알려주세요."
+        )
     header = "\n".join(header_lines)
 
     context_body = "\n\n---\n\n".join(blocks)
@@ -1919,13 +2404,22 @@ class OpenAIResponsesLLM:
         system_prompt = (
             "당신은 뉴스·커뮤니티 트렌드 Q&A 어시스턴트입니다.\n"
             "아래 규칙을 반드시 따르세요.\n\n"
-            "1. CONTEXT에 제공된 자료만 사용하여 답변하세요. CONTEXT에 없는 내용은 답변하지 마세요. 사전 지식이나 추측을 섞지 마세요.\n"
+            "1. CONTEXT에 제공된 자료만 사용하여 답변하세요. CONTEXT에 없는 내용은 답변하지 마세요. "
+            "사전 지식이나 추측을 섞지 마세요.\n"
             "2. [뉴스] 자료는 사실로, [커뮤니티] 자료는 '온라인 반응'으로, [분석결과] 자료는 데이터 기반 분석으로 인용하세요.\n"
             "3. 답변은 3~5문장 이내로 작성하세요. 핵심 트렌드 1~2가지로 요약하세요.\n"
-            "4. '관련 자료가 부족하지만', '관련 자료에 따르면', '검색 결과에 따르면' 같은 메타 표현을 사용하지 마세요. 자연스럽게 답변하세요.\n"
+            "4. 다음 표현은 절대 사용하지 마세요: '관련 자료가 부족하지만', '자료가 부족하지만', "
+            "'관련 자료에 따르면', '검색 결과에 따르면'. "
+            "CONTEXT 자료를 바탕으로 자연스럽게 답변하세요.\n"
             "5. 번호 매기기(1. 2. 3.)나 항목 나열을 하지 마세요. 핵심 이슈를 하나의 흐름으로 자연스럽게 풀어 설명하세요.\n"
             "6. 한국어 존댓말(~합니다, ~있습니다)로 작성하세요.\n"
-            "7. 완전한 문장으로 끝내세요. 추가 질문이나 제안은 붙이지 마세요."
+            "7. 완전한 문장으로 끝내세요. 추가 질문이나 제안은 붙이지 마세요.\n"
+            "8. 뉴스와 커뮤니티 간 비교·대조를 요청받았을 때, CONTEXT에 양쪽 자료가 모두 있으면 "
+            "각 출처의 관점 차이를 설명하세요. 한쪽 자료만 있으면 비교가 불가능하다고 답변하세요.\n"
+            "9. 이 서비스는 한국 사용자를 위한 서비스입니다. 질문에 특정 국가가 명시되지 않으면 "
+            "한국 기준으로 답변하세요. CONTEXT에 한국 관련 자료와 다른 나라 자료가 섞여 있으면 "
+            "한국 관련 자료를 우선하여 답변하세요. CONTEXT에 한국 관련 자료가 없고 다른 나라 자료만 있으면 "
+            "해당 주제에 대한 한국 정보가 없다고 답변하세요. 다른 나라 정보로 대체하지 마세요."
         )
         if instructions:
             system_prompt += f"\n\n[추가 지시사항]\n{instructions}"
@@ -1939,11 +2433,44 @@ class OpenAIResponsesLLM:
         if context_length < 50:
             logger.warning(f"[LLM 프롬프트] CONTEXT가 너무 짧음 ({context_length}자)")
 
+        # 국가 미지정 시 한국 기준 안내를 질문에 직접 첨부
+        _q_lower_llm = query_text.lower()
+        _country_mentioned = any(
+            c in _q_lower_llm
+            for c in [
+                "한국",
+                "미국",
+                "일본",
+                "중국",
+                "영국",
+                "독일",
+                "프랑스",
+                "러시아",
+                "북한",
+                "대만",
+                "호주",
+                "캐나다",
+                "인도",
+                "이란",
+                "korea",
+                "usa",
+                "japan",
+                "china",
+                "uk",
+            ]
+        )
+        _korea_hint = (
+            "\n(특정 국가가 명시되지 않았으므로 한국 기준으로 답변하세요. "
+            "CONTEXT에 한국 자료가 없으면 해당 정보가 없다고 답변하세요.)"
+            if not _country_mentioned
+            else ""
+        )
+
         user_prompt = (
             f"[CONTEXT]\n{context}\n\n"
             f"---\n\n"
             f"위 CONTEXT만을 근거로 다음 질문에 답변하세요.\n"
-            f"[질문] {query_text}"
+            f"[질문] {query_text}{_korea_hint}"
         )
         logger.debug(f"[LLM 프롬프트] 전체 프롬프트 길이={len(user_prompt)}")
 
@@ -2494,10 +3021,9 @@ class RAGService:
         # 분석 의도가 동시에 감지된 경우, 분석 파이프라인을 우선 (메타 건너뜀)
         # ========================================
         q_lower_for_meta = (query_text or "").lower()
-        is_meta_question = (
-            any(p in q_lower_for_meta for p in _META_QUESTION_PATTERNS)
-            and source_intent not in ("analysis", "analysis+search")
-        )
+        is_meta_question = any(
+            p in q_lower_for_meta for p in _META_QUESTION_PATTERNS
+        ) and source_intent not in ("analysis", "analysis+search")
         if is_meta_question:
             # 가장 관련성 높은 설명 선택
             meta_parts = []
@@ -2508,7 +3034,9 @@ class RAGService:
                 meta_parts.append(_META_EXPLANATIONS["트렌드"])
 
             meta_context = "[시스템 설명]\n" + "\n\n".join(meta_parts)
-            logger.info(f"[RAG 메타] 시스템 설명 질문 감지, 키: {[k for k in _META_EXPLANATIONS if k in q_lower_for_meta]}")
+            logger.info(
+                f"[RAG 메타] 시스템 설명 질문 감지, 키: {[k for k in _META_EXPLANATIONS if k in q_lower_for_meta]}"
+            )
 
             llm_result = self.llm.answer(
                 query_text=query_text,
@@ -2541,6 +3069,7 @@ class RAGService:
                 "sources": [{"type": "analysis", "title": "시스템 설명"}],
                 "query": query_text,
                 "history_id": history_id,
+                "model": final_model,
             }
 
         if source_intent == "analysis":
@@ -2588,6 +3117,7 @@ class RAGService:
                     "sources": analysis_sources,
                     "query": query_text,
                     "history_id": history_id,
+                    "model": final_model,
                 }
             else:
                 logger.info("[RAG 분석] 분석 결과 없음, 일반 검색으로 fallback")
@@ -2611,7 +3141,7 @@ class RAGService:
                 compound_candidates = self.vector_db.similarity_search(
                     search_query_for_compound,
                     top_k=retrieval_k,
-                    distance_threshold=1.5,
+                    distance_threshold=0.75,
                     fetch_multiplier=3,
                     balance_types=False,
                 )
@@ -2642,16 +3172,20 @@ class RAGService:
                     want_community = c_ovr
 
                 if want_news and not want_community:
-                    typed = [r for r in merged if _infer_type(r.id, r.metadata) == "news"]
+                    typed = [
+                        r for r in merged if _infer_type(r.id, r.metadata) == "news"
+                    ]
                     if typed:
                         merged = typed
                 elif want_community and not want_news:
-                    typed = [r for r in merged if _infer_type(r.id, r.metadata) == "social"]
+                    typed = [
+                        r for r in merged if _infer_type(r.id, r.metadata) == "social"
+                    ]
                     if typed:
                         merged = typed
 
                 # 상위 N개만 사용
-                merged = merged[:int(top_k)]
+                merged = merged[: int(top_k)]
 
                 if merged:
                     # 뉴스/커뮤니티 context 생성
@@ -2705,6 +3239,7 @@ class RAGService:
                         "sources": combined_sources,
                         "query": query_text,
                         "history_id": history_id,
+                        "model": final_model,
                     }
 
             # 분석 키워드 추출 실패 시 분석 결과만으로 응답 (fallback)
@@ -2725,7 +3260,9 @@ class RAGService:
                 )
                 try:
                     history = QueryHistory.objects.create(
-                        query_text=query_text, answer_text=answer, sources=analysis_sources,
+                        query_text=query_text,
+                        answer_text=answer,
+                        sources=analysis_sources,
                     )
                     history_id = history.id
                 except Exception as e:
@@ -2737,6 +3274,7 @@ class RAGService:
                     "sources": analysis_sources,
                     "query": query_text,
                     "history_id": history_id,
+                    "model": final_model,
                 }
 
             # 분석 결과도 없으면 일반 검색으로 fallback
@@ -2766,7 +3304,9 @@ class RAGService:
             elif _trend_fallback_intent == "community":
                 _kw_platform = "community"
             trending_keywords, trend_summary = _get_trending_keywords_by_topic(
-                topic_words, max_keywords=10, platform=_kw_platform,
+                topic_words,
+                max_keywords=10,
+                platform=_kw_platform,
             )
             logger.info(f"[RAG 트렌드] 추출된 트렌드 키워드: {trending_keywords[:5]}")
 
@@ -2774,13 +3314,15 @@ class RAGService:
                 # 트렌드 키워드로 벡터 검색 (주제 단어를 앞에 배치하여 시맨틱 검색 방향 설정)
                 trend_search_query = " ".join(trending_keywords[:5])
                 if topic_words:
-                    trend_search_query = " ".join(topic_words) + " " + trend_search_query
+                    trend_search_query = (
+                        " ".join(topic_words) + " " + trend_search_query
+                    )
 
                 retrieval_k = max(int(top_k) * 6, int(top_k) + 20)
                 trend_candidates = self.vector_db.similarity_search(
                     trend_search_query,
                     top_k=retrieval_k,
-                    distance_threshold=1.5,
+                    distance_threshold=0.75,
                     fetch_multiplier=3,
                     balance_types=False,
                 )
@@ -2819,11 +3361,15 @@ class RAGService:
                         want_community = c_ovr
 
                 if want_news and not want_community:
-                    typed = [r for r in merged if _infer_type(r.id, r.metadata) == "news"]
+                    typed = [
+                        r for r in merged if _infer_type(r.id, r.metadata) == "news"
+                    ]
                     if typed:
                         merged = typed
                 elif want_community and not want_news:
-                    typed = [r for r in merged if _infer_type(r.id, r.metadata) == "social"]
+                    typed = [
+                        r for r in merged if _infer_type(r.id, r.metadata) == "social"
+                    ]
                     if typed:
                         merged = typed
 
@@ -2835,6 +3381,49 @@ class RAGService:
                     min_keyword_hits=1,
                 )
 
+                # 시간 필터 (일반 파이프라인과 동일 - KST 캘린더 범위)
+                _t_range_start, _t_range_end, _t_scope = _detect_time_scope(
+                    query_text,
+                    intent_time_focus=intent_info.get("time_focus", ""),
+                )
+                if _t_range_start is not None:
+                    from datetime import datetime, timezone
+
+                    _trend_recent = []
+                    for r in merged:
+                        pa = (r.metadata or {}).get("published_at", "")
+                        if pa:
+                            try:
+                                doc_dt = datetime.fromisoformat(pa)
+                                if doc_dt.tzinfo is None:
+                                    doc_dt = doc_dt.replace(tzinfo=timezone.utc)
+                                if doc_dt >= _t_range_start:
+                                    if _t_range_end is None or doc_dt < _t_range_end:
+                                        _trend_recent.append(r)
+                            except (ValueError, TypeError):
+                                pass
+                    _scope_lbl = (
+                        f"{_t_range_start.strftime('%m/%d')}~{_t_range_end.strftime('%m/%d')}"
+                        if _t_range_end
+                        else f"{_t_range_start.strftime('%m/%d')}~현재"
+                    )
+                    if _trend_recent:
+                        logger.info(
+                            f"[RAG 트렌드 시간필터] {_scope_lbl}: "
+                            f"{len(_trend_recent)}개 (전체 {len(merged)}개에서 필터)"
+                        )
+                        merged = _trend_recent
+                    else:
+                        # 시간 필터 결과가 없으면 시간순 정렬 유지
+                        merged.sort(
+                            key=lambda r: (r.metadata or {}).get("published_at", ""),
+                            reverse=True,
+                        )
+                        logger.info(
+                            f"[RAG 트렌드 시간필터] {_scope_lbl} 결과 없음, "
+                            f"전체 {len(merged)}개를 시간순 정렬"
+                        )
+
                 # 거리 게이트: 너무 먼 결과 제거
                 hard_dist = float(_get_setting("RAG_HARD_DISTANCE_THRESHOLD", 1.05))
                 gated = [r for r in merged if r.distance <= hard_dist]
@@ -2844,8 +3433,12 @@ class RAGService:
                 # 뉴스/커뮤니티 균형 선택 (명시적 필터가 없는 경우만)
                 final_k = int(top_k)
                 if not want_news and not want_community and len(merged) > final_k:
-                    news_pool = [r for r in merged if _infer_type(r.id, r.metadata) == "news"]
-                    social_pool = [r for r in merged if _infer_type(r.id, r.metadata) == "social"]
+                    news_pool = [
+                        r for r in merged if _infer_type(r.id, r.metadata) == "news"
+                    ]
+                    social_pool = [
+                        r for r in merged if _infer_type(r.id, r.metadata) == "social"
+                    ]
 
                     if news_pool and social_pool:
                         # 뉴스 70% 목표, 부족하면 상대 타입으로 보충
@@ -2923,6 +3516,7 @@ class RAGService:
                         "sources": combined_sources,
                         "query": query_text,
                         "history_id": history_id,
+                        "model": final_model,
                     }
 
             # 트렌드 키워드로 적절한 결과를 못 찾음 → 원래 의도로 fallback
@@ -2979,17 +3573,29 @@ class RAGService:
 
         retrieval_k = max(int(top_k) * 8, int(top_k) + 30)
         candidate_distance_threshold = float(
-            _get_setting("RAG_CANDIDATE_DISTANCE_THRESHOLD", 1.5)
+            _get_setting("RAG_CANDIDATE_DISTANCE_THRESHOLD", 0.75)
         )
 
-        semantic_candidates = self.vector_db.similarity_search(
-            search_query,
-            top_k=retrieval_k,
-            distance_threshold=candidate_distance_threshold,
-            fetch_multiplier=3,
-            balance_types=False,
+        expanded_queries = _expand_query_for_search(search_query, key_entities)
+        logger.info(f"[RAG 검색] 쿼리 확장: {expanded_queries}")
+
+        semantic_candidates = []
+        seen_semantic_ids: set = set()
+        for eq in expanded_queries:
+            eq_results = self.vector_db.similarity_search(
+                eq,
+                top_k=retrieval_k,
+                distance_threshold=candidate_distance_threshold,
+                fetch_multiplier=3,
+                balance_types=False,
+            )
+            for r in eq_results:
+                if r.id not in seen_semantic_ids:
+                    seen_semantic_ids.add(r.id)
+                    semantic_candidates.append(r)
+        logger.info(
+            f"[RAG 검색] 시맨틱 검색 결과: {len(semantic_candidates)}개 (쿼리 {len(expanded_queries)}개)"
         )
-        logger.info(f"[RAG 검색] 시맨틱 검색 결과: {len(semantic_candidates)}개")
 
         # 3) 키워드 검색 (후보군 B) - 엔티티가 있을 때만
         keyword_candidates: List[SearchResult] = []
@@ -3052,21 +3658,202 @@ class RAGService:
                 "answer": f"'{query_text}'에 대한 관련 정보를 찾을 수 없습니다. 다른 키워드로 검색해보세요.",
                 "sources": [],
                 "query": query_text,
+                "model": final_model,
+            }
+
+        # ========================================
+        # STEP -1: 극도로 모호한 질문 / 대화형 후속 질문 조기 거부
+        # ========================================
+        _q_lower = query_text.strip().lower()
+
+        # (A-0) 시스템 메타 질문 감지 ("너 누구야?", "뭘 할 수 있어?" 등)
+        _meta_patterns = [
+            "너 누구",
+            "넌 누구",
+            "당신은 누구",
+            "뭘 할 수 있",
+            "뭐 할 수 있",
+            "무엇을 할 수",
+            "어떤 기능",
+            "사용법",
+            "사용 방법",
+            "어떻게 써",
+            "어떻게 사용",
+        ]
+        if any(p in _q_lower for p in _meta_patterns):
+            return {
+                "answer": (
+                    "저는 뉴스와 커뮤니티 트렌드 데이터를 기반으로 답변하는 "
+                    "Q&A 어시스턴트입니다.\n\n"
+                    "다음과 같은 질문에 답변할 수 있습니다:\n"
+                    '- 최신 뉴스 요약 (예: "오늘 주요 뉴스 알려줘")\n'
+                    '- 특정 주제 검색 (예: "AI 관련 최신 소식")\n'
+                    '- 커뮤니티 반응 (예: "레딧에서 한국에 대해 뭐라고 해?")\n'
+                    '- 트렌드 분석 (예: "요즘 가장 많이 언급된 키워드")'
+                ),
+                "sources": [],
+                "query": query_text,
+                "model": final_model,
+            }
+
+        # (A) 대화형 후속 질문 감지 (이전 답변 참조형)
+        # "그거 믿어도 돼?", "출처가 어디야?", "더 자세히", "요약해줘" 등
+        # 검색 가능한 주제(엔티티)가 없는 대화형 질문
+        _followup_patterns = [
+            "믿어도",
+            "믿을 수",
+            "신뢰",
+            "정확해",
+            "맞아",
+            "출처가",
+            "출처는",
+            "출처를",
+            "근거가",
+            "근거는",
+            "더 자세히",
+            "더 알려",
+            "더 설명",
+            "좀 더",
+            "요약해",
+            "정리해줘",
+            "다시 말해",
+            "다시 설명",
+            "왜 그래",
+            "왜 그런",
+            "무슨 말",
+            "무슨 뜻",
+            "뭔 말",
+            "뭔 소리",
+        ]
+        _is_followup = any(p in _q_lower for p in _followup_patterns)
+        if _is_followup:
+            # 실제 검색 주제가 있는지 확인 (엔티티 추출)
+            _followup_stop = {
+                "믿어",
+                "출처",
+                "근거",
+                "신뢰",
+                "정확",
+                "요약",
+                "정리",
+                "자세히",
+                "설명",
+                "알려",
+                "보여",
+                "말해",
+                "얘기",
+                "어디",
+                "뭐야",
+                "뭔지",
+                "어때",
+                "맞아",
+                "맞는",
+                "그거",
+                "이거",
+                "저거",
+                "그건",
+                "이건",
+                "더",
+                "좀",
+                "해줘",
+                "해주",
+                "해봐",
+                "할래",
+                "할까",
+                "다시",
+                "왜",
+                "뭔",
+                "무슨",
+                "진짜",
+                "확실",
+                "사실",
+            }
+            _fu_tokens = re.findall(r"[가-힣]{2,}", query_text)
+            # 부분 문자열 매칭: "믿어도"→"믿어" 포함, "출처가"→"출처" 포함
+            _fu_meaningful = [
+                t
+                for t in _fu_tokens
+                if not any(s in t or t in s for s in _followup_stop)
+            ]
+            if not _fu_meaningful:
+                return {
+                    "answer": (
+                        "이전 대화 맥락을 참조할 수 없어 답변이 어렵습니다. "
+                        "궁금한 주제나 키워드를 포함해서 다시 질문해 주세요.\n"
+                        '예: "삼성전자 관련 뉴스 출처 알려줘",'
+                        ' "AI 트렌드 자세히 알려줘"'
+                    ),
+                    "sources": [],
+                    "query": query_text,
+                    "model": final_model,
+                }
+
+        # (B) 극도로 모호한 질문 (불용어만으로 구성)
+        _vague_stop = {
+            "그거",
+            "이거",
+            "저거",
+            "뭐",
+            "어떻게",
+            "됐어",
+            "됐나",
+            "됐냐",
+            "어때",
+            "있어",
+            "없어",
+            "했어",
+            "할까",
+            "인가",
+            "인지",
+            "그래서",
+            "좀",
+            "혹시",
+            "그런데",
+            "근데",
+            "아까",
+            "거기",
+            "여기",
+            "자세히",
+            "알려줘",
+            "알려줘요",
+            "알려주세요",
+            "설명해",
+            "설명해줘",
+            "말해줘",
+            "말해봐",
+            "얘기해",
+            "얘기해줘",
+            "보여줘",
+            "더",
+            "좀더",
+            "다시",
+            "한번",
+            "한번더",
+        }
+        _vague_tokens = re.findall(r"[가-힣]{2,}", query_text)
+        _vague_meaningful = [t for t in _vague_tokens if t not in _vague_stop]
+        if len(_vague_meaningful) == 0 and len(query_text.strip()) < 20:
+            return {
+                "answer": (
+                    "질문이 너무 모호하여 관련 정보를 검색할 수 없습니다. "
+                    "구체적인 키워드나 주제를 포함해 다시 질문해 주세요."
+                ),
+                "sources": [],
+                "query": query_text,
+                "model": final_model,
             }
 
         # ========================================
         # STEP 0: 시간 스코프 감지 + 날짜 기반 사전 필터
         # ========================================
-        time_scope_days = _detect_time_scope(
+        range_start_dt, range_end_dt, time_scope_days = _detect_time_scope(
             query_text,
             intent_time_focus=intent_info.get("time_focus", ""),
         )
         _now_ts = time.time()
 
-        if time_scope_days > 0:
-            from datetime import datetime, timedelta, timezone
-
-            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=time_scope_days)
+        if range_start_dt is not None:
+            from datetime import datetime, timezone
 
             recent_candidates = []
             for r in candidates:
@@ -3075,22 +3862,43 @@ class RAGService:
                     continue
                 try:
                     doc_dt = datetime.fromisoformat(pa.replace("Z", "+00:00"))
-                    if doc_dt >= cutoff_dt:
-                        recent_candidates.append(r)
+                    if doc_dt.tzinfo is None:
+                        doc_dt = doc_dt.replace(tzinfo=timezone.utc)
+                    # 범위 필터: range_start <= doc_dt < range_end
+                    if doc_dt >= range_start_dt:
+                        if range_end_dt is None or doc_dt < range_end_dt:
+                            recent_candidates.append(r)
                 except (ValueError, TypeError):
                     pass
+
+            scope_label = (
+                f"{range_start_dt.strftime('%m/%d %H:%M')}~{range_end_dt.strftime('%m/%d %H:%M')}"
+                if range_end_dt
+                else f"{range_start_dt.strftime('%m/%d %H:%M')}~현재"
+            )
 
             # 시간 필터 후 결과가 충분하면 사용, 아니면 원본 유지
             if len(recent_candidates) >= max(int(top_k), 3):
                 logger.info(
-                    f"[RAG 시간필터] {time_scope_days}일 이내: {len(recent_candidates)}개 "
+                    f"[RAG 시간필터] {scope_label}: {len(recent_candidates)}개 "
                     f"(전체 {len(candidates)}개에서 필터)"
                 )
                 candidates = recent_candidates
-            else:
+            elif recent_candidates:
+                # 결과가 부족해도 1개 이상이면 해당 기간 결과 사용
                 logger.info(
-                    f"[RAG 시간필터] {time_scope_days}일 이내 {len(recent_candidates)}개로 부족, "
-                    f"전체 {len(candidates)}개 유지"
+                    f"[RAG 시간필터] {scope_label}: {len(recent_candidates)}개 (부족하지만 사용)"
+                )
+                candidates = recent_candidates
+            else:
+                # 해당 기간 결과가 0개면 시간순 정렬로 fallback
+                candidates.sort(
+                    key=lambda r: (r.metadata or {}).get("published_at", ""),
+                    reverse=True,
+                )
+                logger.info(
+                    f"[RAG 시간필터] {scope_label} 결과 0개, "
+                    f"전체 {len(candidates)}개를 시간순으로 정렬"
                 )
 
         # ========================================
@@ -3100,7 +3908,9 @@ class RAGService:
         if source_intent == "news":
             typed = [r for r in candidates if _infer_type(r.id, r.metadata) == "news"]
             if typed:
-                logger.info(f"[RAG 필터] news intent → 후보군 {len(candidates)}개에서 뉴스 {len(typed)}개로 사전 필터")
+                logger.info(
+                    f"[RAG 필터] news intent → 후보군 {len(candidates)}개에서 뉴스 {len(typed)}개로 사전 필터"
+                )
                 candidates = typed
             else:
                 logger.warning(
@@ -3109,7 +3919,9 @@ class RAGService:
         elif source_intent == "community":
             typed = [r for r in candidates if _infer_type(r.id, r.metadata) == "social"]
             if typed:
-                logger.info(f"[RAG 필터] community intent → 후보군 {len(candidates)}개에서 소셜 {len(typed)}개로 사전 필터")
+                logger.info(
+                    f"[RAG 필터] community intent → 후보군 {len(candidates)}개에서 소셜 {len(typed)}개로 사전 필터"
+                )
                 candidates = typed
             else:
                 logger.warning(
@@ -3129,6 +3941,61 @@ class RAGService:
             final_k=int(top_k) * 2,
             min_keyword_hits=min_hits,
         )
+
+        # ========================================
+        # STEP B-2: 키워드 매칭 문서의 distance 보정
+        # ========================================
+        _dist_skip_words = {
+            "자세히",
+            "알려줘",
+            "알려주세요",
+            "설명해",
+            "설명해줘",
+            "말해줘",
+            "보여줘",
+            "뉴스",
+            "기사",
+            "소식",
+            "정보",
+            "내용",
+            "관련",
+            "최근",
+            "최신",
+            "오늘",
+            "어제",
+            "인기",
+            "핫한",
+            "주요",
+            "가장",
+            "제일",
+            "뭐야",
+            "뭐가",
+            "어때",
+            "있어",
+        }
+        _filtered_entities = [e for e in key_entities if e not in _dist_skip_words]
+        if _filtered_entities:
+            for r in results:
+                meta = r.metadata or {}
+                combined = f"{meta.get('title', '')}\n{meta.get('excerpt', '')}\n{r.document or ''}"
+                combined_lower = combined.lower()
+                match_count = sum(
+                    1 for ent in _filtered_entities if ent.lower() in combined_lower
+                )
+                if match_count > 0 and r.distance > 0.40:
+                    # cosine 거리 0.80 초과는 보정 제외 (우연한 키워드 매칭)
+                    if r.distance > 0.80:
+                        continue
+                    old_dist = r.distance
+                    reduction = min(match_count * 0.05, 0.10)
+                    # distance가 높을수록 보정 효과 감소
+                    if r.distance > 0.60:
+                        reduction *= 0.5
+                    r.distance = max(r.distance - reduction, 0.30)
+                    logger.debug(
+                        f"[RAG distance 보정] entity {match_count}개 매칭: "
+                        f"distance {old_dist:.3f} → {r.distance:.3f}"
+                    )
 
         # ========================================
         # STEP C: 거리 게이트 (하드 → 소프트 → fallback 단계적 적용)
@@ -3161,7 +4028,7 @@ class RAGService:
         #   2) 키워드 overlap
         #   3) 최신성 가산 (시간 민감 쿼리일수록 강하게)
         #   4) 시맨틱 거리 (tiebreaker)
-        final_distance_cutoff = float(_get_setting("RAG_DISTANCE_THRESHOLD", 0.25))
+        final_distance_cutoff = float(_get_setting("RAG_DISTANCE_THRESHOLD", 0.15))
         has_entities = bool(key_entities)
         # 시간 민감 쿼리면 recency 가중치를 높임
         recency_weight = 5.0 if time_scope_days > 0 else 1.0
@@ -3196,7 +4063,9 @@ class RAGService:
         final_k = int(top_k)
         if source_intent == "any" and len(results) > final_k:
             news_pool = [r for r in results if _infer_type(r.id, r.metadata) == "news"]
-            social_pool = [r for r in results if _infer_type(r.id, r.metadata) == "social"]
+            social_pool = [
+                r for r in results if _infer_type(r.id, r.metadata) == "social"
+            ]
 
             if news_pool and social_pool:
                 # 뉴스 70% 목표, 부족하면 상대 타입으로 보충
@@ -3256,6 +4125,7 @@ class RAGService:
                 "answer": insufficient_msg.get(source_intent, insufficient_msg["any"]),
                 "sources": [],
                 "query": query_text,
+                "model": final_model,
             }
 
         # ========================================
@@ -3329,6 +4199,7 @@ class RAGService:
                 "answer": f"'{query_text}'에 대한 관련 정보를 찾을 수 없습니다. 다른 키워드로 검색해보세요.",
                 "sources": [],
                 "query": query_text,
+                "model": final_model,
             }
 
         # intent_instruction이 있으면 instructions에 합류
@@ -3448,6 +4319,35 @@ class RAGService:
 
         logger.info(f"[RAG 타이밍] LLM 답변 생성: {time.time() - _t_stage:.2f}s")
         logger.info(f"[RAG 타이밍] 전체 파이프라인: {time.time() - _t_pipeline:.2f}s")
+
+        # "정보 없음" 답변이면 출처를 비워서 혼란 방지
+        _no_info_signals = [
+            "정보가 없습니다",
+            "정보는 없습니다",
+            "정보를 찾을 수 없",
+            "정보가 부족",
+            "정보가 포함되어 있지 않",
+            "자료가 없습니다",
+            "자료가 부족",
+            "자료가 없어",
+            "제공된 context에 없",
+            "제공된 context에는 없",
+            "context에 포함되어 있지 않",
+            "context에는 포함되어 있지 않",
+            "관련 정보가 없",
+            "관련 자료가 없",
+            "관련된 정보가 없",
+            "비교할 수 있는 자료가 없",
+            "비교가 불가능",
+            "확인되지 않",
+            "찾을 수 없습니다",
+            "제공하기 어렵",
+            "답변드리기 어렵",
+            "요청하신 내용에 대한 관련",
+        ]
+        _answer_lower = answer.lower().replace(" ", "")
+        if any(sig.replace(" ", "") in _answer_lower for sig in _no_info_signals):
+            sources = []
 
         history = QueryHistory.objects.create(
             query_text=query_text,

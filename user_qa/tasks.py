@@ -134,16 +134,26 @@ def _safe_join(*parts: str) -> str:
 
 def build_news_embedding_text(article) -> str:
     """
-    NewsArticle 모델 기준: title/description/author/category/url + source.publisher/source.category
+    NewsArticle 모델 기준: title/description + publisher/category/author
+    출처·분류·저자 정보를 포함하여 시맨틱 검색 품질 향상.
     """
     title = (getattr(article, "title", "") or "").strip()
     desc = _strip_html(getattr(article, "description", "") or "")
     category = (getattr(article, "category", "") or "").strip()
 
-    # ✅ 임베딩 텍스트는 "내용 중심"으로만 구성 (메타데이터는 Chroma metadata로 따로 저장)
-    # - 뉴스: title + description
-    # - (필요 시) author/url 등을 본문에 섞고 싶다면 getattr(article, "author"|"url", "") 추가
-    return _safe_join(title, desc, category)
+    publisher = ""
+    if hasattr(article, "source") and article.source:
+        publisher = (getattr(article.source, "publisher", "") or "").strip()
+    author = (getattr(article, "author", "") or "").strip()
+
+    parts = [title, desc]
+    if publisher:
+        parts.append(f"출처: {publisher}")
+    if category:
+        parts.append(f"분류: {category}")
+    if author:
+        parts.append(f"기자: {author}")
+    return _safe_join(*parts)
 
 
 def build_social_embedding_text(post) -> str:
