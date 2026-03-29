@@ -20,6 +20,7 @@ from data_collector.models import NewsArticle, SocialMediaPost
 from data_collector.serializers import (
     BaseSocialMediaPostSerializer,
     DCInsidePostSerializer,
+    NewsArticleListSerializer,
     NewsArticleSerializer,
     RedditPostSerializer,
 )
@@ -75,6 +76,11 @@ class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
         set_cached_list_response(request, "dashboard:news", response.data)
         return response
 
+    def get_serializer_class(self):
+        if getattr(self, "action", None) == "list":
+            return NewsArticleListSerializer
+        return NewsArticleSerializer
+
     def get_queryset(self):
         queryset = NewsArticle.objects.all()
         queryset = filter_queryset_by_params(
@@ -107,7 +113,15 @@ class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
                     queryset = queryset.filter(collected_at__date=dt)
                 except ValueError:
                     pass
-        return queryset.select_related("source")
+        queryset = queryset.select_related("source")
+        if getattr(self, "action", None) == "list":
+            queryset = queryset.defer(
+                "description",
+                "url",
+                "author",
+                "is_processed",
+            )
+        return queryset
 
 
 class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):

@@ -44,6 +44,15 @@ _COMMON_LANG_PARAMETER = OpenApiParameter(
     required=False,
 )
 
+# 목록 API는 TrendAnalysisResultListSerializer만 쓰므로 DB에서 무거운 JSON/텍스트는 읽지 않음
+_TREND_RESULT_LIST_DEFER = (
+    "result_data",
+    "parameters",
+    "summary",
+    "error_message",
+)
+
+
 _LIST_ANALYSIS_PARAMETERS = [
     _COMMON_LANG_PARAMETER,
     OpenApiParameter(
@@ -131,6 +140,8 @@ class TrendAnalysisResultViewSet(viewsets.ReadOnlyModelViewSet):
             if dt_to:
                 queryset = queryset.filter(created_at__lte=dt_to)
 
+        if getattr(self, "action", None) == "list":
+            queryset = queryset.defer(*_TREND_RESULT_LIST_DEFER)
         return queryset
 
 
@@ -182,6 +193,8 @@ class BaseAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
         status_param = self.request.query_params.get("status")
         if status_param:
             queryset = queryset.filter(status=status_param)
+        if getattr(self, "action", None) == "list":
+            queryset = queryset.defer(*_TREND_RESULT_LIST_DEFER)
         return queryset
 
 

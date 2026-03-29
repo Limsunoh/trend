@@ -233,8 +233,26 @@ CACHES = {
     }
 }
 
-# 목록 API Redis 캐시 TTL (초).
-LIST_API_CACHE_TTL = int(os.getenv("LIST_API_CACHE_TTL", "900"))
+# 목록 API Redis 캐시 TTL (초) — .env에서 그룹별 설정.
+# - 수집(뉴스/소셜 목록): 짧게
+# - 분석(결과·keywords 등 목록): 상대적으로 길게
+# - QA 히스토리 목록: 가장 짧게
+# 하위 호환: 환경변수 LIST_API_CACHE_TTL만 설정하면 위 세 그룹을 모두 동일 값으로 덮어씀.
+_list_ttl_unified = os.getenv("LIST_API_CACHE_TTL")
+if _list_ttl_unified is not None:
+    _list_ttl_v = int(_list_ttl_unified)
+    LIST_API_CACHE_TTL_DASHBOARD = _list_ttl_v
+    LIST_API_CACHE_TTL_ANALYZER = _list_ttl_v
+    LIST_API_CACHE_TTL_QA_HISTORY = _list_ttl_v
+else:
+    LIST_API_CACHE_TTL_DASHBOARD = int(os.getenv("LIST_API_CACHE_TTL_DASHBOARD", "120"))
+    LIST_API_CACHE_TTL_ANALYZER = int(os.getenv("LIST_API_CACHE_TTL_ANALYZER", "600"))
+    LIST_API_CACHE_TTL_QA_HISTORY = int(
+        os.getenv("LIST_API_CACHE_TTL_QA_HISTORY", "60")
+    )
+
+# getattr(settings, "LIST_API_CACHE_TTL") / 미분류 prefix 폴백용 (수집측과 동일 의미)
+LIST_API_CACHE_TTL = LIST_API_CACHE_TTL_DASHBOARD
 
 # Celery Configuration
 CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
