@@ -4,6 +4,7 @@ from rest_framework import status, viewsets
 from rest_framework.response import Response
 
 from common.list_cache import get_cached_list_response, set_cached_list_response
+from common.pagination import QueryHistoryPagination
 
 from .models import QueryHistory
 from .serializers import (
@@ -21,8 +22,10 @@ class QueryHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     질의응답 히스토리 조회. 목록은 Redis 캐시로 응답 가속.
     """
 
+    list_cache_prefix = "user_qa:history"
     queryset = QueryHistory.objects.all().order_by("-id")
     serializer_class = QueryHistorySerializer
+    pagination_class = QueryHistoryPagination
 
     def list(self, request, *args, **kwargs):
         # 캐시 hit 시 DB/직렬화 없이 바로 반환 (목록 API 부하 감소)

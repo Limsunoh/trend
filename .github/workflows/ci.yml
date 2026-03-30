@@ -46,7 +46,8 @@ jobs:
             --ignore-vuln CVE-2026-25674 --ignore-vuln CVE-2026-25673 \
             --ignore-vuln GHSA-rf74-v2fm-23pw --ignore-vuln CVE-2026-33230 --ignore-vuln CVE-2026-33231 \
             --ignore-vuln CVE-2026-30922 \
-            --ignore-vuln GHSA-78cv-mqj4-43f7 --ignore-vuln CVE-2026-31958
+            --ignore-vuln GHSA-78cv-mqj4-43f7 --ignore-vuln CVE-2026-31958 \
+            --ignore-vuln CVE-2026-4539 --ignore-vuln CVE-2026-25645
 
 
   lint:

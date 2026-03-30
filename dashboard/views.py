@@ -11,10 +11,10 @@ from datetime import datetime
 from django.db.models import Q, QuerySet
 from rest_framework import viewsets
 from rest_framework.filters import OrderingFilter, SearchFilter
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from common.list_cache import get_cached_list_response, set_cached_list_response
+from common.pagination import DashboardPageNumberPagination
 from common.rate_limit import ReadAPIThrottle
 from data_collector.models import NewsArticle, SocialMediaPost
 from data_collector.serializers import (
@@ -42,14 +42,6 @@ def filter_queryset_by_params(queryset: QuerySet, request, filters: dict) -> Que
     return queryset
 
 
-class DashboardPageNumberPagination(PageNumberPagination):
-    """대시보드 목록용 페이지네이션 (한 페이지 50개)"""
-
-    page_size = 50
-    page_size_query_param = "page_size"
-    max_page_size = 100
-
-
 # =============================================================================
 # 뉴스 기사 / 소셜 미디어 게시물 (목록·상세)
 # =============================================================================
@@ -58,6 +50,7 @@ class DashboardPageNumberPagination(PageNumberPagination):
 class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
     """뉴스 기사 ViewSet (읽기 전용). 목록은 Redis 캐시로 응답 가속."""
 
+    list_cache_prefix = "dashboard:news"
     queryset = NewsArticle.objects.all()
     serializer_class = NewsArticleSerializer
     throttle_classes = [ReadAPIThrottle]
@@ -127,6 +120,7 @@ class NewsArticleViewSet(viewsets.ReadOnlyModelViewSet):
 class SocialMediaPostViewSet(viewsets.ReadOnlyModelViewSet):
     """소셜 미디어 게시물 ViewSet (읽기 전용). 목록은 Redis 캐시로 응답 가속."""
 
+    list_cache_prefix = "dashboard:social"
     queryset = SocialMediaPost.objects.all()
     serializer_class = BaseSocialMediaPostSerializer
     throttle_classes = [ReadAPIThrottle]
