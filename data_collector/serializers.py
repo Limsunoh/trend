@@ -1,7 +1,8 @@
 from typing import Any, Dict, Optional
 
-from django.db.models import Count
 from rest_framework import serializers
+
+from common.list_cache import get_cached_source_id_count_map
 
 from .models import (
     DataCollectionJob,
@@ -324,14 +325,9 @@ class NewsArticleSerializer(serializers.ModelSerializer):
                 )
 
             if source_ids:
-                rows = (
-                    NewsArticle.objects.filter(source_id__in=source_ids)
-                    .values("source_id")
-                    .annotate(total=Count("id"))
+                self.context["source_article_count_map"] = (
+                    get_cached_source_id_count_map(NewsArticle, "news", source_ids)
                 )
-                self.context["source_article_count_map"] = {
-                    row["source_id"]: row["total"] for row in rows
-                }
             else:
                 self.context["source_article_count_map"] = {}
 
@@ -767,14 +763,9 @@ class BaseSocialMediaPostSerializer(serializers.ModelSerializer):
                 )
 
             if source_ids:
-                rows = (
-                    SocialMediaPost.objects.filter(source_id__in=source_ids)
-                    .values("source_id")
-                    .annotate(total=Count("id"))
+                self.context["source_post_count_map"] = get_cached_source_id_count_map(
+                    SocialMediaPost, "social", source_ids
                 )
-                self.context["source_post_count_map"] = {
-                    row["source_id"]: row["total"] for row in rows
-                }
             else:
                 self.context["source_post_count_map"] = {}
 

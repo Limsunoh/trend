@@ -7,6 +7,7 @@
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db.models import Count
 
 
 def make_list_cache_key(request, prefix: str) -> str:
@@ -65,3 +66,41 @@ def set_cached_list_response(request, prefix: str, data: dict) -> None:
     key = make_list_cache_key(request, prefix)
     ttl = get_list_cache_ttl(prefix)
     cache.set(key, data, ttl)
+
+
+def get_or_set_cached_list_count(request, prefix: str, queryset) -> int:
+    """
+    DRF pagination의 queryset.count()와 동일한 값을 Redis에 캐시한다.
+    목록 응답 캐시 miss 시에도 동일 요청 키로 count를 재사용해 COUNT(*) 부하를 줄인다.
+    """
+    key = make_list_cache_key(request, prefix) + ":count"
+    cached = cache.get(key)
+    if cached is not None:
+        return int(cached)
+    n = queryset.count()
+    ttl = get_list_cache_ttl(prefix)
+    cache.set(key, n, ttl)
+    return n
+
+
+def get_cached_source_id_count_map(model, namespace: str, source_ids: set) -> dict:
+    """
+    PI 상위 쿼리로 잡힌 source_id별 COUNT(id) 집계를 Redis에 캐시한다.
+    (NewsArticleSerializer / BaseSocialMediaPostSerializer 의 GROUP BY 배치 집계)
+    """
+    if not source_ids:
+        return {}
+    sorted_ids = sorted(source_ids)
+    key = f"source_id_counts:{namespace}:{','.join(map(str, sorted_ids))}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    rows = (
+        model.objects.filter(source_id__in=source_ids)
+        .values("source_id")
+        .annotate(total=Count("id"))
+    )
+    result = {row["source_id"]: row["total"] for row in rows}
+    ttl = int(getattr(settings, "LIST_API_CACHE_TTL_DASHBOARD", 120))
+    cache.set(key, result, ttl)
+    return result
