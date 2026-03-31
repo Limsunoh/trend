@@ -861,12 +861,12 @@ locust -f locustfile.py --host=http://3.37.203.226:8000 --headless -u 20 -r 5 -t
 - `@message`에 `500` / `502` / `503` 단순 패턴 스캔: **0건** (로그 포맷에 따라 누락 가능)  
 - EC2 `CPUUtilization` (`i-0a66c20698b2f3878`, 분 단위 **Average**): 약 **3.4% → 30.2% → 84.2%** (KST 22:29 ~ 22:31 각 분; 구간 단순 평균 **약 39%** 내외, 마지막 분 **약 84%**)  
 (MCP 실측 차원: `InstanceId=i-0a66c20698b2f3878`, `InstanceType=m7i-flex.large`)  
-- EC2 `mem_used_percent`(CWAgent, `host=i-0a66c20698b2f3878`): 해당 창 **Datapoint 없음** (`N/A`)  
+- EC2 `mem_used_percent`(CWAgent, `InstanceId=i-0a66c20698b2f3878`, `ImageId=ami-0130d8d35bcd2d433`, `InstanceType=m7i-flex.large`): 약 **30.91% → 31.58% → 31.86%** (구간 평균 약 **31.45%**)  
 - RDS `trend-db` `CPUUtilization` (분 **Average**): 약 **4.3% → 7.9% → 7.4%** (구간 평균 **약 6.5%** 내외)  
 - RDS `ReadIOPS` / `WriteIOPS` (분 **Average**): Read 대략 **2.3 → 14.2 → 5.5**, Write 대략 **0.95 → 10.9 → 1.05**  
 - 세 줄 판정:
   1. **EC2 CPU:** 3분 부하 후반 **분당 평균 ~84%** 까지 올라가도 Locust **평균 63ms·95% 260ms·실패 0%** 와 함께 **앱 층 처리량·응답**이 양호한 편.
-  2. **EC2 메모리:** CWAgent 메트릭 미수집으로 이번 창은 판정 보류.
+  2. **EC2 메모리:** 같은 창에서 **약 31%대(평균 31.45%)**로 안정적이며, 메모리 병목 신호는 보이지 않음.
   3. **RDS:** CPU·IOPS 모두 **저부하**로 보이며, `defer`·경량 serializer로 **읽기·직렬화 부담이 줄었다**는 해석과 정합.
 
 **RDS Performance Insights (Database Insights, MCP `aws pi describe-dimension-keys`):** 인스턴스 `trend-db` (`DbiResourceId` `db-HCZWTKDYYGXEPASZFN7SY6RN2I`, PostgreSQL, PI 활성). 메트릭 `**db.load.avg`**, 그룹 `**db.sql**`. `Total` 은 해당 구간 **평균 활성 세션(AAS) 기여** 근사.
@@ -895,6 +895,59 @@ locust -f locustfile.py --host=http://3.37.203.226:8000 --headless -u 20 -r 5 -t
 - `**source_id IN (1,2,5)` + `GROUP BY`**: **TTL 캐시·rollup** 후보. (이 10분 상위에는 뉴스 목록 **JOIN** 쿼리가 **별도 순위로 잡히지 않았고**, `COUNT`·이 집계가 두드러짐.)
 
 **참고:** **Locust 지표·11-1 대비 공정 비교**는 **12-1(3분)** 수치를 쓰고, **Database Insights(SQL 순위)** 는 위 **초기 10분(KST 20:29:32~20:39:32)** 만 본다. 초기 10분 HTML: `Locust_2026-03-29-20h29_locustfile.py_http___3.37.203.226_8000.html`.
+
+---
+
+### 열세 번째 테스트 (2026-03-30 16h59 KST, Locust, 동시 **1,000명**, **5분**, QA POST 제외)
+
+**리포트:** `Locust_Redis+gevent+caddy+n+1+Gunicorn설정추가+maxrequests삭제+defer,경량serializer+쿼리 최적화 후 천명 테스트.html`  
+**호스트:** `http://3.37.203.226:8000` · **Locust 파일:** `locustfile.py`  
+**구간:** **UTC** `2026-03-30T07:59:53Z` ~ `2026-03-30T08:04:54Z` (KST 16:59:53 ~ 17:04:54, **5분 1초**).
+
+**지표 요약:**
+
+| 지표 | 기준 (목표) | 열세 번째 테스트 결과 | 판정 |
+|------|-------------|-----------------------|------|
+| **Failure %** | 0% | **0건 / 143,521건 = 0%** | **좋음** — 목표 달성 |
+| **RPS** | 부하 대비 유지 | **약 478.0 RPS** (Aggregated) | **좋음** |
+| **일반 API 평균/95%/99%** | < 200ms / < 500ms | 전체 평균 **28.4ms**, **50% 22ms**, **95% 69ms**, **99% 190ms** | **매우 좋음** |
+| **무거운 API (QA)** | 평균 < 5초, 99% < 15초 | QA POST 제외(`user_qa_query` @task(0)) | - |
+| **Response time 추이** | 부하 구간 안정 | 5분 유지·실패 0% | **좋음** |
+
+**12-1 대비 13차 2~3줄 요약(얼마나 더 개선됐는지):**
+- 평균 응답 `63.3ms` -> `28.4ms`로 약 **55.1% 감소**(약 **2.2배** 개선), 95% `260ms` -> `69ms`로 약 **73.5% 감소**(약 **3.8배** 개선)했습니다.
+- 99% `650ms` -> `190ms`로 약 **70.8% 감소**(약 **3.4배** 개선)했고, RPS는 `~460.7` -> `~478.0`로 소폭 증가했으며 Failure는 **0%로 동일**합니다.
+
+**엔드포인트별 통계 (요약):**
+
+- `/api/analyzer/analysis-results/?page_size=10` — 31,224 / 0 / 평균 **24ms**, 50% **16ms**, 95% **65ms**, 99% **180ms**, **104.0 RPS**  
+- `/api/analyzer/analysis/keywords/` — 24,838 / 0 / 평균 **25ms**, 50% **16ms**, 95% **66ms**, 99% **180ms**, **82.7 RPS**  
+- `/api/dashboard/news/?page_size=20` — 31,545 / 0 / 평균 **25ms**, 50% **16ms**, 95% **66ms**, 99% **180ms**, **105.1 RPS**  
+- `/api/dashboard/social/?page_size=20` — 31,114 / 0 / 평균 **35ms**, 50% **26ms**, 95% **75ms**, 99% **190ms**, **103.6 RPS**  
+- `/api/user_qa/history/?page_size=10` — 24,800 / 0 / 평균 **34ms**, 50% **26ms**, 95% **75ms**, 99% **200ms**, **82.6 RPS**
+
+**CloudWatch MCP 실측(UTC `2026-03-30T07:59:53Z` ~ `2026-03-30T08:04:54Z`, 리전 `ap-northeast-2`):**
+
+- Logs Insights(`trend/web-access`) 처리 로그: **143,443건** (Locust 총 143,521건과 **약 78건 차이**)  
+- `@message`에 ` 500 ` / ` 502 ` / ` 503 ` 단순 패턴 스캔: **0건**  
+- EC2 `CPUUtilization` (`i-0a66c20698b2f3878`, 분 **Average**): 약 **3.34% → 19.08% → 70.97% → 71.18% → 71.00%**  
+  (구간 단순 평균 약 **47%** 내외, 고부하 분당 약 **71%**)  
+- EC2 `mem_used_percent`(CWAgent, `InstanceId=i-0a66c20698b2f3878`, `ImageId=ami-0130d8d35bcd2d433`, `InstanceType=m7i-flex.large`): 약 **21.52% → 22.37% → 22.29% → 22.46% → 22.41%** (구간 평균 약 **22.21%**)  
+- RDS `trend-db` `CPUUtilization` (분 **Average**): 약 **4.28% → 5.36% → 4.90% → 4.59% → 4.55%** (구간 평균 약 **4.7%**)  
+- RDS `ReadIOPS` / `WriteIOPS` (분 **Average**): Read **4.37 → 16.85 → 5.34 → 3.92 → 3.41**, Write **0.97 → 11.39 → 1.12 → 1.12 → 1.35**
+
+**RDS Performance Insights (MCP `aws pi describe-dimension-keys`):**
+
+- 인스턴스: `trend-db` (`db-HCZWTKDYYGXEPASZFN7SY6RN2I`, PostgreSQL, PI 활성)  
+- 같은 시간창(UTC `07:59:53` ~ `08:04:54`)에서 메트릭 `db.load.avg`, 그룹 `db.sql` 조회 결과: **`Keys=[]`** (상위 SQL 미노출)  
+- 주변 확장 창(UTC `07:55:00` ~ `08:10:00`)으로 넓혀도 `db.sql`은 **`Keys=[]`**
+
+**해석 (DB 쿼리 최적화 필요도):**
+
+1. 이번 13차 창에서는 PI `db.sql` 상위 항목이 비어 있고, RDS CPU도 **약 4~5%대**라 **DB가 병목으로 보이지 않음**.  
+2. 따라서 **지금 시점에서 신규 DB 쿼리 최적화(인덱스/쿼리 구조 변경)를 급하게 추가할 필요는 낮음**.  
+3. 우선순위는 DB 튜닝보다 **현 캐시/쿼리 최적화 상태 유지 + 회귀 모니터링**이 맞음.  
+4. 다만 데이터량이 커지거나 TTL을 크게 낮추면 `COUNT/GROUP BY`가 재부상할 수 있으니, 동일 창 방식으로 PI/CloudWatch를 주기적으로 재확인할 것.
 
 ---
 

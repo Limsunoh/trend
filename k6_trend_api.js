@@ -62,7 +62,7 @@ export const options = {
       // 테스트 총 실행 시간
       // 값을 늘리면 워밍 이후 안정 구간/메모리 누수/장기 스파이크 관찰에 유리
       // 예) 3m, 10m, 1h
-      duration: __ENV.DURATION || "3m",
+      duration: __ENV.DURATION || "5m",
 
       // 시작 시 미리 확보할 VU(가상 유저) 수
       // 너무 작으면 목표 rate를 못 따라가며 dropped_iterations가 생길 수 있음
