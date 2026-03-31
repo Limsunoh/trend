@@ -369,3 +369,50 @@ class AnalysisCacheService(RedisService):
         self.client.setex(
             cache_key, ttl, json.dumps(result, ensure_ascii=False, default=str)
         )
+
+
+# ============================================
+# 7. 쿼리 임베딩 벡터 캐시
+# ============================================
+class EmbeddingCacheService(RedisService):
+    """
+    쿼리 텍스트 → 임베딩 벡터 캐시. 동일 쿼리 재검색 시 SentenceTransformer 호출 생략.
+    키: emb:{md5(text)}. TTL 1시간.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.PREFIX = "emb:"
+        self.CACHE_TTL = 3600
+
+    def _key(self, text: str) -> str:
+        h = hashlib.md5(text.strip().encode()).hexdigest()
+        return f"{self.PREFIX}{h}"
+
+    def get_vector(self, text: str) -> Optional[list]:
+        cached = self.client.get(self._key(text))
+        if cached:
+            return json.loads(cached)
+        return None
+
+    def set_vector(self, text: str, vector: list, ttl: Optional[int] = None):
+        self.client.setex(self._key(text), ttl or self.CACHE_TTL, json.dumps(vector))
+
+    def get_vectors_batch(self, texts: list) -> dict:
+        """여러 텍스트의 캐시된 벡터를 한 번에 조회. {text: vector or None}"""
+        if not texts:
+            return {}
+        keys = [self._key(t) for t in texts]
+        values = self.client.mget(keys)
+        result = {}
+        for text, val in zip(texts, values):
+            result[text] = json.loads(val) if val else None
+        return result
+
+    def set_vectors_batch(self, text_vector_pairs: list, ttl: Optional[int] = None):
+        """[(text, vector), ...] 형태로 일괄 저장."""
+        ttl = ttl or self.CACHE_TTL
+        pipe = self.client.pipeline()
+        for text, vector in text_vector_pairs:
+            pipe.setex(self._key(text), ttl, json.dumps(vector))
+        pipe.execute()

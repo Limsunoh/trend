@@ -14,7 +14,7 @@ from chromadb.config import Settings as ChromaSettings
 from django.conf import settings
 from django.db.models import Max
 
-from common.redis_services import RAGCacheService
+from common.redis_services import EmbeddingCacheService, RAGCacheService
 from data_collector.models import NewsArticle, SocialMediaPost
 
 from .models import QueryHistory
@@ -78,6 +78,38 @@ class VectorDBService:
             normalize_embeddings=True,
         )
         return [v.tolist() for v in vectors]
+
+    def embed_texts_cached(self, texts: List[str]) -> List[List[float]]:
+        """Redis 캐시를 활용한 임베딩. 쿼리 검색용."""
+        try:
+            cache = EmbeddingCacheService()
+            cached = cache.get_vectors_batch(texts)
+        except Exception:
+            return self.embed_texts(texts)
+
+        results: List[Optional[List[float]]] = []
+        miss_indices: List[int] = []
+        miss_texts: List[str] = []
+
+        for i, text in enumerate(texts):
+            vec = cached.get(text)
+            if vec is not None:
+                results.append(vec)
+            else:
+                results.append(None)
+                miss_indices.append(i)
+                miss_texts.append(text)
+
+        if miss_texts:
+            new_vecs = self.embed_texts(miss_texts)
+            try:
+                cache.set_vectors_batch(list(zip(miss_texts, new_vecs)))
+            except Exception:
+                pass
+            for idx, vec in zip(miss_indices, new_vecs):
+                results[idx] = vec
+
+        return results
 
     def upsert_documents(
         self,
@@ -147,7 +179,7 @@ class VectorDBService:
         balance_types=True  : (기존) 뉴스/소셜 균형 선택 로직 적용
         balance_types=False : 후보군만 거리순으로 반환(재랭킹 전용)
         """
-        q_emb = self.embed_texts([query_text])[0]
+        q_emb = self.embed_texts_cached([query_text])[0]
 
         fetch_k = max(top_k * fetch_multiplier, top_k + 5)
 
@@ -217,6 +249,68 @@ class VectorDBService:
 
         return balanced_results[:top_k]
 
+    def batch_similarity_search(
+        self,
+        query_texts: List[str],
+        top_k: int = 5,
+        distance_threshold: float = 0.10,
+        fetch_multiplier: int = 2,
+    ) -> List[List[SearchResult]]:
+        """
+        여러 쿼리를 한 번에 임베딩 + 검색 (배치 처리).
+        embed_texts 호출을 1회로 줄여 성능 향상.
+
+        Returns:
+            각 쿼리별 SearchResult 리스트의 리스트
+        """
+        if not query_texts:
+            return []
+
+        q_embs = self.embed_texts_cached(query_texts)
+        fetch_k = max(top_k * fetch_multiplier, top_k + 5)
+
+        res = self.collection.query(
+            query_embeddings=q_embs,
+            n_results=fetch_k,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        all_results: List[List[SearchResult]] = []
+        for qi in range(len(query_texts)):
+            ids = res.get("ids", [[]])[qi] if qi < len(res.get("ids", [])) else []
+            docs = (
+                res.get("documents", [[]])[qi]
+                if qi < len(res.get("documents", []))
+                else []
+            )
+            metas = (
+                res.get("metadatas", [[]])[qi]
+                if qi < len(res.get("metadatas", []))
+                else []
+            )
+            dists = (
+                res.get("distances", [[]])[qi]
+                if qi < len(res.get("distances", []))
+                else []
+            )
+
+            candidates: List[SearchResult] = []
+            for _id, doc, meta, dist in zip(ids, docs, metas, dists):
+                distance = float(dist)
+                if distance <= distance_threshold:
+                    candidates.append(
+                        SearchResult(
+                            id=_id,
+                            document=doc,
+                            metadata=meta or {},
+                            distance=distance,
+                        )
+                    )
+            candidates.sort(key=lambda x: x.distance)
+            all_results.append(candidates[:top_k])
+
+        return all_results
+
     def keyword_search(
         self,
         query_text: str,
@@ -237,7 +331,7 @@ class VectorDBService:
         if not keywords:
             return []
 
-        q_emb = self.embed_texts([query_text])[0]
+        q_emb = self.embed_texts_cached([query_text])[0]
 
         all_results: List[SearchResult] = []
         seen_ids: set = set()
@@ -3618,14 +3712,13 @@ class RAGService:
 
         semantic_candidates = []
         seen_semantic_ids: set = set()
-        for eq in expanded_queries:
-            eq_results = self.vector_db.similarity_search(
-                eq,
-                top_k=retrieval_k,
-                distance_threshold=candidate_distance_threshold,
-                fetch_multiplier=3,
-                balance_types=False,
-            )
+        batch_results = self.vector_db.batch_similarity_search(
+            expanded_queries,
+            top_k=retrieval_k,
+            distance_threshold=candidate_distance_threshold,
+            fetch_multiplier=3,
+        )
+        for eq_results in batch_results:
             for r in eq_results:
                 if r.id not in seen_semantic_ids:
                     seen_semantic_ids.add(r.id)
