@@ -371,9 +371,7 @@ class AnalysisCacheService(RedisService):
         )
 
 
-# ============================================
 # 7. 쿼리 임베딩 벡터 캐시
-# ============================================
 class EmbeddingCacheService(RedisService):
     """
     쿼리 텍스트 → 임베딩 벡터 캐시. 동일 쿼리 재검색 시 SentenceTransformer 호출 생략.
