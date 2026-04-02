@@ -149,7 +149,7 @@ python manage.py remove_failed_sources --confirm --deactivate  # 비활성화
 
 ## 문서
 
-
+- [DB 쿼리 최적화](DB_QUERY_OPTIMIZATION.md) — 쿼리 벤치마크·측정·최적화 요약
 
 ---
 
