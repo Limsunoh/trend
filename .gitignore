@@ -77,6 +77,11 @@ nul
 # Docker local override
 docker-compose.override.yml
 
+# 로컬 전용(워크트리에는 유지, Git 추적 제외): 소스 fixture·보조 스크립트·RDS CA 등
+/fixtures/
+/scripts/
+/certs/
+
 # Vector DB / Chroma
 chroma_db/
 vector_db/
