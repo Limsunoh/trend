@@ -6,7 +6,7 @@
 
 ## 주요 기능
 
-- RSS 기반 소스 등록 및 수집 트리거·잡(job) 관리(Celery 비동기)
+- RSS 기반 소스 등록 및 수집 트리거·잡(job) 관리(Celery 백그라운드·작업 큐)
 - 분석 결과 API(키워드, 급상승, 시간차, 플랫폼 비교, 트렌드 동기화, 시간대별, 참여도 등)
 - 뉴스 기사·소셜 게시물 목록·상세 API 및 React SPA
 - Redis 캐시로 목록·집계 API 성능 최적화
@@ -21,7 +21,7 @@
 |------|------|
 | Backend | Django 4.2, Django REST Framework, drf-spectacular |
 | 데이터·캐시 | PostgreSQL, Redis |
-| 비동기 | Celery |
+| 작업 큐·백그라운드 | Celery |
 | 수집·크롤링 | dcinside-read-api(dcapi), Feedparser, requests, Selenium, BeautifulSoup4 |
 | 분석·NLP | PyKomoran(KoNLPy), Chroma(벡터 검색) |
 | Frontend | React 18, Vite, React Router, Axios |
@@ -43,16 +43,31 @@
 
 ---
 
-## 문서·다이어그램 (`docs/`)
+## 아키텍처
+
+### 시스템 아키텍처
+
+인프라·런타임 구성(EC2, Docker Compose, RDS, Redis, Celery, Chroma 등)과 데이터 흐름
+
+![시스템 아키텍처](docs/AI_Trend%20%EC%8B%9C%EC%8A%A4%ED%85%9C%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98.png)
+
+### 애플리케이션 아키텍처 (아이콘)
+
+Django 앱·프론트·외부 연동 중심의 논리 구조
+
+![애플리케이션 아키텍처 (아이콘)](docs/AI_Trend%20%EC%95%A0%ED%94%8C%EB%A6%AC%EC%BC%80%EC%9D%B4%EC%85%98%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98-icon.png)
+
+### 배포·운영 아키텍처
+
+GitHub Actions → Docker Hub → 운영 EC2, CloudWatch·RDS Insights·Sentry 등 관측
+
+![배포·운영 아키텍처](docs/AI_Trend%20%EB%B0%B0%ED%8F%AC%C2%B7%EC%9A%B4%EC%98%81%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98.png)
+
+### 기타 문서
 
 | 이름 | 설명 |
 |------|------|
-| [시스템 아키텍처](docs/AI_Trend%20%EC%8B%9C%EC%8A%A4%ED%85%9C%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98.png) | 인프라·런타임 구성(EC2, Docker Compose, RDS, Redis, Celery, Chroma 등)과 데이터 흐름 |
-| [애플리케이션 아키텍처](docs/AI_Trend%20%EC%95%A0%ED%94%8C%EB%A6%AC%EC%BC%80%EC%9D%B4%EC%85%98%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98.png) | Django 앱·프론트·외부 연동 중심의 논리 구조 |
-| [애플리케이션 아키텍처 (아이콘)](docs/AI_Trend%20%EC%95%A0%ED%94%8C%EB%A6%AC%EC%BC%80%EC%9D%B4%EC%85%98%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98-icon.png) | 위와 동일 주제, 서비스 아이콘을 사용한 버전 |
-| [배포·운영 아키텍처](docs/AI_Trend%20%EB%B0%B0%ED%8F%AC%C2%B7%EC%9A%B4%EC%98%81%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98.png) | GitHub Actions → Docker Hub → 운영 EC2, CloudWatch·RDS Insights·Sentry 등 관측 |
 | [ERD](docs/AI_Trend-ERD.png) | PostgreSQL 기준 엔티티 관계(주요 테이블·관계) |
-| [배포·운영 draw.io 프롬프트](docs/drawio-deployment-ops-architecture-prompt.md) | 배포·운영 다이어그램을 draw.io AI 등에 넣을 때 쓰는 단독 지시문 |
 
 ---
 
