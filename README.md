@@ -22,7 +22,7 @@
 | Backend | Django 4.2, Django REST Framework, drf-spectacular |
 | 데이터·캐시 | PostgreSQL, Redis |
 | 작업 큐·백그라운드 | Celery |
-| 수집·크롤링 | dcinside-read-api(dcapi), Feedparser, requests, Selenium, BeautifulSoup4 |
+| 수집·크롤링 | [dcinside-read-api](https://github.com/Limsunoh/dcinside-read-api)(dcapi), Feedparser, requests, Selenium, BeautifulSoup4 |
 | 분석·NLP | PyKomoran(KoNLPy), Chroma(벡터 검색) |
 | Frontend | React 18, Vite, React Router, Axios |
 | 운영 | Gunicorn + gevent |
