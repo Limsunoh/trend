@@ -16,6 +16,15 @@ from common.sentry_dual_dsn import DualDsnsTransport
 # Load environment variables
 load_dotenv(override=True)
 
+
+def _env_bool(key: str, default: bool = False) -> bool:
+    """`.env`의 DEBUG 등 불리언 — true/false, 1/0, yes/no 대소문자 무시."""
+    raw = os.getenv(key)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
 # 로컬 PostgreSQL(Windows)이 UTF-8이 아닌 응답을 보낼 때 UnicodeDecodeError 방지
 # libpq가 연결 시 UTF-8을 쓰도록 강제
 if "PGCLIENTENCODING" not in os.environ:
@@ -43,7 +52,8 @@ FIXTURE_DIRS = [BASE_DIR / "fixtures"]
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-change-this-in-production")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv("DEBUG", "True") == "True"
+# `.env`에서 DEBUG=False / 0 / no 등으로 끄면 됨 (미설정 시 로컬 기본 True)
+DEBUG = _env_bool("DEBUG", default=True)
 
 ALLOWED_HOSTS = ["*"]
 
@@ -271,38 +281,6 @@ CELERY_TASK_ROUTES = {
     "user_qa.tasks.embed_recent_social_posts_task": {"queue": "embedding"},
 }
 
-# Celery Beat Schedule
-# data_collector와 analyzer 태스크를 함께 스케줄링할 수 있습니다.
-#
-# CELERY_BEAT_SCHEDULE = {
-#     # 데이터 수집 (예: 1시간마다)
-#     'collect-all-news': {
-#         'task': 'data_collector.collect_all_rss_news_task',
-#         'schedule': timedelta(hours=1),
-#     },
-#     'collect-all-social': {
-#         'task': 'data_collector.collect_all_social_media_task',
-#         'schedule': timedelta(hours=1),
-#     },
-#     # 데이터 수집 후 분석 (예: 6시간마다)
-#     'analyze-time-lag': {
-#         'task': 'analyzer.analyze_time_lag_task',
-#         'schedule': timedelta(hours=6),
-#     },
-#     'detect-surge-keywords': {
-#         'task': 'analyzer.detect_surge_keywords_task',
-#         'schedule': timedelta(hours=6),
-#     },
-#     'analyze-trend-synchronization': {
-#         'task': 'analyzer.analyze_trend_synchronization_task',
-#         'schedule': timedelta(hours=6),
-#     },
-#     'analyze-hourly-trends': {
-#         'task': 'analyzer.analyze_hourly_trends_task',
-#         'schedule': timedelta(hours=6),
-#     },
-# }
-
 CELERY_BEAT_SCHEDULE = {
     # ✅ 안전망: 자동 임베딩 트리거가 실패한 경우를 대비한 주기적 임베딩
     # check_session_completion에서 이벤트 기반으로 트리거하지만,
@@ -413,7 +391,6 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
-# CORS Settings
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:8000",
