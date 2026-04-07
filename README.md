@@ -1,156 +1,133 @@
 # 실시간 트렌드 분석 대시보드
 
-뉴스·소셜 미디어 데이터를 수집하고, 키워드·트렌드 분석 결과를 대시보드에서 확인할 수 있는 풀스택 프로젝트입니다.
-
----
-
-## 목차
-
-- [주요 기능](#주요-기능)
-- [기술 스택](#기술-스택)
-- [프로젝트 구조](#프로젝트-구조)
-- [시작하기](#시작하기)
-- [사용 방법](#사용-방법)
-- [API 문서](#api-문서)
-- [문서](#문서)
+뉴스(RSS)와 소셜 미디어 데이터를 수집하고, 키워드·트렌드 분석 결과를 React 기반 대시보드에서 확인하는 풀스택 프로젝트입니다.
 
 ---
 
 ## 주요 기능
 
-| 구분 | 설명 |
-|------|------|
-| **데이터 수집** | RSS 기반 뉴스 기사 수집, 소셜 미디어 게시물 수집 (Celery 비동기) |
-| **대시보드** | 뉴스/소셜 목록 조회, 검색·정렬·페이지네이션, 상세 페이지 |
-| **트렌드 분석** | 11종 분석(키워드, 플랫폼 비교, 인기/급상승 키워드, 시간차, 동기화, 시간대별, 타임라인, 참여도 등) |
-| **분석 결과** | 분석 타입별 목록 조회, 상세 결과(summary/result_data) 확인 |
+- RSS 기반 소스 등록 및 수집 트리거·잡(job) 관리(Celery 백그라운드·작업 큐)
+- 분석 결과 API(키워드, 급상승, 시간차, 플랫폼 비교, 트렌드 동기화, 시간대별, 참여도 등)
+- 뉴스 기사·소셜 게시물 목록·상세 API 및 React SPA
+- Redis 캐시로 목록·집계 API 성능 최적화
+- 부하 테스트를 바탕으로 한 캐시·큐·동시성 튜닝 경험
+- Swagger/OpenAPI, `GET /api/health/`, `GET /api/debug/active-requests/`
 
 ---
 
-## 기술 스택
+## 🖥️ 기술 스택 (Technologies & Tools)
 
-| 영역 | 기술 |
-|------|------|
-| **Backend** | Django 4.2, Django REST Framework |
-| **DB** | PostgreSQL, Redis |
-| **Task Queue** | Celery, Flower(모니터링) |
-| **Frontend** | React 18, Vite, React Router, Axios |
-| **분석/ML** | PyKomoran(KoNLPy), Pandas, scikit-learn |
-| **수집** | Feedparser, BeautifulSoup4, Selenium, Tweepy |
-| **API 문서** | drf-spectacular (Swagger/ReDoc) |
+[Shields.io](https://shields.io) 배지 · [Project_SANA_I](https://github.com/Limsunoh/Project_SANA_I?tab=readme-ov-file) README와 같은 `for-the-badge` 스타일
+
+### 📝 FrontEnd
+
+[![React 18](https://img.shields.io/badge/React_18-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![React Router](https://img.shields.io/badge/React_Router-CA4245?style=for-the-badge&logo=reactrouter&logoColor=white)](https://reactrouter.com/)
+[![Axios](https://img.shields.io/badge/Axios-5A29E4?style=for-the-badge&logo=axios&logoColor=white)](https://axios-http.com/)
+
+### 📝 BackEnd
+
+[![Python 3.10+](https://img.shields.io/badge/Python_3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Django 4.2](https://img.shields.io/badge/Django_4.2-092E20?style=for-the-badge&logo=django&logoColor=white)](https://www.djangoproject.com/)
+[![Django REST Framework](https://img.shields.io/badge/Django_REST_Framework-092E20?style=for-the-badge&logo=django&logoColor=white)](https://www.django-rest-framework.org/)
+[![drf-spectacular](https://img.shields.io/badge/drf--spectacular-6BA539?style=for-the-badge&logo=openapiinitiative&logoColor=white)](https://drf-spectacular.readthedocs.io/)
+
+### 📝 Data · Cache
+
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Amazon RDS](https://img.shields.io/badge/Amazon_RDS-527FFF?style=for-the-badge&logo=amazonrds&logoColor=white)](https://aws.amazon.com/rds/)
+[![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
+
+### 📝 Queue · 수집 · 크롤링
+
+[![Celery](https://img.shields.io/badge/Celery-37814A?style=for-the-badge&logo=celery&logoColor=white)](https://docs.celeryq.dev/)
+[![dcinside-read-api](https://img.shields.io/badge/dcinside--read--api-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Limsunoh/dcinside-read-api)
+[![requests](https://img.shields.io/badge/requests-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://requests.readthedocs.io/)
+[![Selenium](https://img.shields.io/badge/Selenium-43B02A?style=for-the-badge&logo=selenium&logoColor=white)](https://www.selenium.dev/)
+[![BeautifulSoup4](https://img.shields.io/badge/BeautifulSoup4-9400d3?style=for-the-badge)](https://www.crummy.com/software/BeautifulSoup/)
+[![Feedparser](https://img.shields.io/badge/Feedparser-FF6600?style=for-the-badge&logo=rss&logoColor=white)](https://feedparser.readthedocs.io/)
+
+### 📝 분석 · NLP
+
+[![KoNLPy PyKomoran](https://img.shields.io/badge/KoNLPy_PyKomoran-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://konlpy.org/)
+[![Chroma](https://img.shields.io/badge/Chroma_vector_DB-FF6B35?style=for-the-badge)](https://www.trychroma.com/)
+
+### 📝 운영 · Infra
+
+[![Gunicorn](https://img.shields.io/badge/Gunicorn-499848?style=for-the-badge&logo=gunicorn&logoColor=white)](https://gunicorn.org/)
+[![gevent](https://img.shields.io/badge/gevent-2E8B57?style=for-the-badge)](http://www.gevent.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Amazon EC2](https://img.shields.io/badge/Amazon_EC2-FF9900?style=for-the-badge&logo=amazonec2&logoColor=white)](https://aws.amazon.com/ec2/)
+
+### 💬 문서 · 협업
+
+[![API 명세 Notion](https://img.shields.io/badge/API_명세_(Notion)-000000?style=for-the-badge&logo=notion&logoColor=white)](https://plum-erigeron-514.notion.site/AI_Trend_API-33b4933e7f1c81198bd5cabc650560e6)
+[![ERD](https://img.shields.io/badge/ERD_(PostgreSQL)-316192?style=for-the-badge&logo=postgresql&logoColor=white)](docs/AI_Trend-ERD.png)
+[![Limsunoh](https://img.shields.io/badge/Limsunoh-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Limsunoh)
+[![kwang1215](https://img.shields.io/badge/kwang1215-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/kwang1215)
 
 ---
 
 ## 프로젝트 구조
 
-```
-trend/
-├── trend_analyzer/     # Django 프로젝트 설정
-├── dashboard/          # 대시보드 API (뉴스/소셜 목록)
-├── data_collector/     # 뉴스·소셜 수집, 소스 관리
-├── analyzer/          # 트렌드 분석 로직·API·Celery 태스크
-├── user_qa/            # (추가 모듈)
-├── frontend/           # React + Vite 프론트엔드
-│   └── src/
-│       ├── components/ # Dashboard, DataCollector, Analyzer, 상세 페이지
-│       └── services/   # API 클라이언트
-├── manage.py
-└── requirements.txt
-```
+| 경로 | 역할 |
+|------|------|
+| `trend_analyzer/` | Django 설정, URL 라우팅, Swagger·health |
+| `data_collector/` | 소스 등록, 수집 트리거·잡 API |
+| `dashboard/` | 뉴스·소셜 목록·상세 API |
+| `analyzer/` | 분석 타입별 결과 API |
+| `user_qa/` | RAG 질의·히스토리·변환 API |
+| `common/` | health, active requests, SPA 서빙 |
+| `frontend/` | React SPA |
 
 ---
 
-## 시작하기
+## 아키텍처
 
-### 요구 사항
+### 시스템 아키텍처
 
-- Python 3.10+
-- Node.js 18+ (프론트엔드)
-- PostgreSQL, Redis
+인프라·런타임 구성(EC2, Docker Compose, RDS, Redis, Celery, Chroma 등)과 데이터 흐름
 
-### 설치
+![시스템 아키텍처](docs/AI_Trend%20%EC%8B%9C%EC%8A%A4%ED%85%9C%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98.png)
 
-```bash
-# 저장소 클론 후
-cd trend
+### 애플리케이션 아키텍처
 
-# 가상환경 생성 및 활성화
-python -m venv .venv
-source .venv/Scripts/activate   # Windows Git Bash
-# .venv\Scripts\activate        # Windows CMD
+Django 앱·프론트·외부 연동 중심의 논리 구조
 
-# 의존성 설치
-pip install -r requirements.txt
+![애플리케이션 아키텍처](docs/AI_Trend%20%EC%95%A0%ED%94%8C%EB%A6%AC%EC%BC%80%EC%9D%B4%EC%85%98%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98.png)
 
-# 환경 변수 설정 (필수)
-# .env 파일을 생성하고 DB, Redis, SECRET_KEY 등 설정 (실행 방법은 .env 하단 참고)
-```
+### 배포·운영 아키텍처
 
-### 프론트엔드
+GitHub Actions → Docker Hub → 운영 EC2, CloudWatch·RDS Insights·Sentry 등 관측
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+![배포·운영 아키텍처](docs/AI_Trend%20%EB%B0%B0%ED%8F%AC%C2%B7%EC%9A%B4%EC%98%81%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98.png)
 
-**서버 실행, Celery 워커, Flower, 분석 명령어** 등 상세 실행 방법은 **`.env` 파일 맨 아래**에 정리되어 있습니다. (`.env`는 git에 포함되지 않습니다.)
+### 기타 문서
+
+| 이름 | 설명 |
+|------|------|
+| [API 명세 (Notion)](https://plum-erigeron-514.notion.site/AI_Trend_API-33b4933e7f1c81198bd5cabc650560e6) | 엔드포인트·request/response 예시 (`AI_Trend_API`) |
+| [ERD](docs/AI_Trend-ERD.png) | PostgreSQL 기준 엔티티 관계(주요 테이블·관계) |
 
 ---
 
-## 사용 방법
+## Live Demo
 
-### 1. 뉴스 소스 로드
-
-CSV에서 뉴스 소스(예: 경향신문, 중앙일보)를 DB에 로드합니다.
-
-```bash
-python manage.py load_csv_sources
-# 다른 CSV: python manage.py load_csv_sources --csv-file 경로/파일명.csv
-```
-
-### 2. 뉴스·소셜 수집
-
-1. Django 서버와 Celery 워커를 실행합니다. (명령어는 `.env` 하단 참고)
-2. **Swagger** `http://localhost:8000/api/docs/` 에서 `POST /api/collector/trigger/` 호출  
-   - 전체: `{"collect_all": true}`  
-   - 특정 소스: `{"source_id": 1}` 또는 `{"source_name": "경향신문"}`
-3. 수집 상태는 Celery 로그 또는 `GET /api/collector/jobs/` 로 확인합니다.
-
-### 3. 실패한 RSS 소스 정리
-
-```bash
-python manage.py remove_failed_sources --test    # 확인만
-python manage.py remove_failed_sources --confirm # 삭제
-python manage.py remove_failed_sources --confirm --deactivate  # 비활성화
-```
-
-### 4. 트렌드 분석
-
-- **전체 분석 일괄 실행:** `python manage.py run_all_analyses` (옵션은 `.env` 참고)
-- **대시보드**에서 “분석 결과” 탭으로 이동 후, 분석 타입별 목록·상세 결과를 확인할 수 있습니다.
-
----
-
-## API 문서
-
-| 문서 | URL |
+| 항목 | URL |
 |------|-----|
-| Swagger UI | http://localhost:8000/api/docs/ |
-| ReDoc | http://localhost:8000/api/redoc/ |
-
-주요 API prefix:
-
-- `/api/dashboard/` — 뉴스·소셜 목록 (대시보드용)
-- `/api/collector/` — 수집 트리거, 소스, 작업 목록
-- `/api/analyzer/` — 분석 결과 목록·상세, 분석 타입별 엔드포인트
+| 서비스 | https://aitrend.xn--hu5b25b77nvwc.xn--3e0b707e/ |
+| API 명세 (Notion) | https://plum-erigeron-514.notion.site/AI_Trend_API-33b4933e7f1c81198bd5cabc650560e6 |
+| Swagger UI | https://aitrend.xn--hu5b25b77nvwc.xn--3e0b707e/api/docs/ |
+| ReDoc | https://aitrend.xn--hu5b25b77nvwc.xn--3e0b707e/api/redoc/ |
 
 ---
 
-## 문서
+## 주요 API Prefix
 
-- [DB 쿼리 최적화](DB_QUERY_OPTIMIZATION.md) — 쿼리 벤치마크·측정·최적화 요약
-
----
-
-*실행 명령(서버, Celery, Flower, 프론트엔드, 분석 명령 등)은 `.env` 파일 하단에만 정리되어 있으며, git에는 포함되지 않습니다.*
+| Prefix | 설명 |
+|--------|------|
+| `/api/collector/` | 소스, 수집 트리거, 잡 상태 |
+| `/api/dashboard/` | 뉴스·소셜 목록·상세 |
+| `/api/analyzer/` | 분석 결과(타입별) |
+| `/api/user_qa/` | RAG 기반 질의 |
