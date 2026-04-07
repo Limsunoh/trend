@@ -15,7 +15,7 @@
 
 ---
 
-## 🖥️ 기술 스택 (Technologies & Tools)
+## 기술 스택 (Technologies & Tools)
 
 ### FrontEnd
 
