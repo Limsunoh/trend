@@ -63,6 +63,7 @@
 ### 💬 문서 · 협업
 
 [![API 명세 Notion](https://img.shields.io/badge/API_명세_(Notion)-000000?style=for-the-badge&logo=notion&logoColor=white)](https://plum-erigeron-514.notion.site/AI_Trend_API-33b4933e7f1c81198bd5cabc650560e6)
+[![ERD](https://img.shields.io/badge/ERD_(PostgreSQL)-316192?style=for-the-badge&logo=postgresql&logoColor=white)](docs/AI_Trend-ERD.png)
 [![Limsunoh](https://img.shields.io/badge/Limsunoh-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Limsunoh)
 [![kwang1215](https://img.shields.io/badge/kwang1215-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/kwang1215)
 
