@@ -67,6 +67,7 @@ GitHub Actions → Docker Hub → 운영 EC2, CloudWatch·RDS Insights·Sentry �
 
 | 이름 | 설명 |
 |------|------|
+| [API 명세 (Notion)](https://plum-erigeron-514.notion.site/AI_Trend_API-33b4933e7f1c81198bd5cabc650560e6) | 엔드포인트·request/response 예시 (`AI_Trend_API`) |
 | [ERD](docs/AI_Trend-ERD.png) | PostgreSQL 기준 엔티티 관계(주요 테이블·관계) |
 
 ---
@@ -76,6 +77,7 @@ GitHub Actions → Docker Hub → 운영 EC2, CloudWatch·RDS Insights·Sentry �
 | 항목 | URL |
 |------|-----|
 | 서비스 | https://aitrend.xn--hu5b25b77nvwc.xn--3e0b707e/ |
+| API 명세 (Notion) | https://plum-erigeron-514.notion.site/AI_Trend_API-33b4933e7f1c81198bd5cabc650560e6 |
 | Swagger UI | https://aitrend.xn--hu5b25b77nvwc.xn--3e0b707e/api/docs/ |
 | ReDoc | https://aitrend.xn--hu5b25b77nvwc.xn--3e0b707e/api/redoc/ |
 
